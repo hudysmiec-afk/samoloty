@@ -38,6 +38,24 @@ protected:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Plane|Flight", meta=(ClampMin="0"))
 	float ForwardSpeed = 3000.0f;
 
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Plane|Boost", meta=(ClampMin="1.0"))
+	float BoostSpeedMultiplier = 1.8f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Plane|Boost", meta=(ClampMin="0.1"))
+	float BoostResponseSpeed = 3.5f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Plane|Boost", meta=(ClampMin="5", ClampMax="170"))
+	float NormalFieldOfView = 90.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Plane|Boost", meta=(ClampMin="5", ClampMax="170"))
+	float BoostFieldOfView = 105.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Plane|Boost", meta=(ClampMin="0"))
+	float NormalCameraDistance = 1150.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Plane|Boost", meta=(ClampMin="0"))
+	float BoostCameraDistance = 1350.0f;
+
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Plane|Flight", meta=(ClampMin="0"))
 	float StrafeSpeed = 700.0f;
 
@@ -96,8 +114,14 @@ protected:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Plane|Camera", meta=(ClampMin="0.1"))
 	float CameraFramingSpeed = 5.0f;
 
+	/** Use this in BP_PlayerPlane to enable engine trails, sound and UI effects. */
+	UFUNCTION(BlueprintImplementableEvent, Category="Plane|Boost")
+	void OnBoostStateChanged(bool bBoosting);
+
 private:
 	void SetStrafe(float Value);
+	void StartBoost();
+	void StopBoost();
 	void UpdateCursorSteering(float DeltaSeconds);
 	void MoveAircraft(float DeltaSeconds);
 	void RotateAircraft(float DeltaSeconds);
@@ -108,5 +132,7 @@ private:
 	float SmoothedMouseY = 0.0f;
 	float TargetPitch = 0.0f;
 	float TargetYaw = 0.0f;
+	float BoostAlpha = 0.0f;
+	bool bBoostRequested = false;
 	FVector CurrentCameraSocketOffset = FVector(0.0f, 0.0f, 180.0f);
 };

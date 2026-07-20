@@ -64,6 +64,8 @@ void AArcadeJetPawn::SetupPlayerInputComponent(UInputComponent* PlayerInputCompo
 	Super::SetupPlayerInputComponent(PlayerInputComponent);
 	check(PlayerInputComponent);
 	PlayerInputComponent->BindAxis(TEXT("PlaneStrafe"), this, &AArcadeJetPawn::SetStrafe);
+	PlayerInputComponent->BindAction(TEXT("PlaneBoost"), IE_Pressed, this, &AArcadeJetPawn::StartBoost);
+	PlayerInputComponent->BindAction(TEXT("PlaneBoost"), IE_Released, this, &AArcadeJetPawn::StopBoost);
 }
 
 void AArcadeJetPawn::Tick(const float DeltaSeconds)
@@ -71,6 +73,8 @@ void AArcadeJetPawn::Tick(const float DeltaSeconds)
 	Super::Tick(DeltaSeconds);
 	SmoothedStrafeInput = FMath::FInterpTo(
 		SmoothedStrafeInput, StrafeInput, DeltaSeconds, StrafeResponseSpeed);
+	BoostAlpha = FMath::FInterpTo(
+		BoostAlpha, bBoostRequested ? 1.0f : 0.0f, DeltaSeconds, BoostResponseSpeed);
 	RotateAircraft(DeltaSeconds);
 	MoveAircraft(DeltaSeconds);
 
@@ -83,10 +87,30 @@ void AArcadeJetPawn::Tick(const float DeltaSeconds)
 	CurrentCameraSocketOffset = FMath::VInterpTo(
 		CurrentCameraSocketOffset, DesiredSocketOffset, DeltaSeconds, CameraFramingSpeed);
 	CameraBoom->SocketOffset = CurrentCameraSocketOffset;
+	CameraBoom->TargetArmLength = FMath::Lerp(NormalCameraDistance, BoostCameraDistance, BoostAlpha);
+	FollowCamera->SetFieldOfView(FMath::Lerp(NormalFieldOfView, BoostFieldOfView, BoostAlpha));
 	CameraBoom->CameraLagSpeed = CameraLagSpeed;
 }
 
 void AArcadeJetPawn::SetStrafe(const float Value) { StrafeInput = Value; }
+
+void AArcadeJetPawn::StartBoost()
+{
+	if (!bBoostRequested)
+	{
+		bBoostRequested = true;
+		OnBoostStateChanged(true);
+	}
+}
+
+void AArcadeJetPawn::StopBoost()
+{
+	if (bBoostRequested)
+	{
+		bBoostRequested = false;
+		OnBoostStateChanged(false);
+	}
+}
 
 void AArcadeJetPawn::UpdateCursorSteering(const float DeltaSeconds)
 {
@@ -148,7 +172,8 @@ void AArcadeJetPawn::RotateAircraft(const float DeltaSeconds)
 
 void AArcadeJetPawn::MoveAircraft(const float DeltaSeconds)
 {
-	const FVector Velocity = GetActorForwardVector() * ForwardSpeed + GetActorRightVector() * SmoothedStrafeInput * StrafeSpeed;
+	const float CurrentForwardSpeed = ForwardSpeed * FMath::Lerp(1.0f, BoostSpeedMultiplier, BoostAlpha);
+	const FVector Velocity = GetActorForwardVector() * CurrentForwardSpeed + GetActorRightVector() * SmoothedStrafeInput * StrafeSpeed;
 	FHitResult Hit;
 	AddActorWorldOffset(Velocity * DeltaSeconds, true, &Hit);
 
