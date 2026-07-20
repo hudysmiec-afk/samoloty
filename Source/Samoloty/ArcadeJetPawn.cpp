@@ -1,8 +1,12 @@
 #include "ArcadeJetPawn.h"
 
+#include "ArcadeFlightComponent.h"
+#include "JetBoostComponent.h"
+#include "JetStatsComponent.h"
 #include "Camera/CameraComponent.h"
 #include "Components/CapsuleComponent.h"
 #include "Components/InputComponent.h"
+#include "Components/SceneComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "GameFramework/PlayerController.h"
 #include "GameFramework/SpringArmComponent.h"
@@ -10,7 +14,10 @@
 AArcadeJetPawn::AArcadeJetPawn()
 {
 	PrimaryActorTick.bCanEverTick = true;
-	AutoPossessPlayer = EAutoReceiveInput::Player0;
+	SetReplicates(true);
+	SetReplicateMovement(true);
+	SetNetUpdateFrequency(30.0f);
+	SetMinNetUpdateFrequency(15.0f);
 
 	Collision = CreateDefaultSubobject<UCapsuleComponent>(TEXT("Collision"));
 	Collision->InitCapsuleSize(110.0f, 240.0f);
@@ -21,10 +28,14 @@ AArcadeJetPawn::AArcadeJetPawn()
 	PlaneMesh->SetupAttachment(Collision);
 	PlaneMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 
+	JetStats = CreateDefaultSubobject<UJetStatsComponent>(TEXT("JetStats"));
+	JetBoost = CreateDefaultSubobject<UJetBoostComponent>(TEXT("JetBoost"));
+	FlightMovement = CreateDefaultSubobject<UArcadeFlightComponent>(TEXT("FlightMovement"));
+
 	CameraBoom = CreateDefaultSubobject<USpringArmComponent>(TEXT("CameraBoom"));
 	CameraBoom->SetupAttachment(Collision);
-	CameraBoom->TargetArmLength = 1150.0f;
-	CameraBoom->SocketOffset = FVector(0.0f, 0.0f, 180.0f);
+	CameraBoom->TargetArmLength = NormalCameraDistance;
+	CameraBoom->SocketOffset = CurrentCameraSocketOffset;
 	CameraBoom->bUsePawnControlRotation = false;
 	CameraBoom->bInheritPitch = true;
 	CameraBoom->bInheritYaw = true;
@@ -32,17 +43,18 @@ AArcadeJetPawn::AArcadeJetPawn()
 	CameraBoom->bEnableCameraLag = true;
 	CameraBoom->bEnableCameraRotationLag = false;
 	CameraBoom->CameraLagSpeed = CameraLagSpeed;
-	CameraBoom->CameraRotationLagSpeed = 7.0f;
 	CameraBoom->bDoCollisionTest = true;
 
 	FollowCamera = CreateDefaultSubobject<UCameraComponent>(TEXT("FollowCamera"));
 	FollowCamera->SetupAttachment(CameraBoom, USpringArmComponent::SocketName);
-	FollowCamera->FieldOfView = 90.0f;
+	FollowCamera->FieldOfView = NormalFieldOfView;
 }
 
 void AArcadeJetPawn::BeginPlay()
 {
 	Super::BeginPlay();
+	JetStats->RecalculateStats();
+	CacheNetworkSmoothedComponents();
 
 	if (APlayerController* PlayerController = Cast<APlayerController>(GetController()))
 	{
@@ -71,115 +83,157 @@ void AArcadeJetPawn::SetupPlayerInputComponent(UInputComponent* PlayerInputCompo
 void AArcadeJetPawn::Tick(const float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);
-	SmoothedStrafeInput = FMath::FInterpTo(
-		SmoothedStrafeInput, StrafeInput, DeltaSeconds, StrafeResponseSpeed);
-	BoostAlpha = FMath::FInterpTo(
-		BoostAlpha, bBoostRequested ? 1.0f : 0.0f, DeltaSeconds, BoostResponseSpeed);
-	RotateAircraft(DeltaSeconds);
-	MoveAircraft(DeltaSeconds);
+	if (IsLocallyControlled())
+	{
+		UpdateCursorInput();
+		FlightMovement->SetLocalFlightInput(CursorSteering, StrafeInput);
+		UpdateLocalCamera(DeltaSeconds);
+	}
+	else if (IsNetworkSimulatedProxy())
+	{
+		UpdateNetworkVisualSmoothing(DeltaSeconds);
+	}
+}
 
-	// Keep the camera aligned behind the aircraft, but shift the framing slightly.
-	// This gives screen-space movement without ever showing the aircraft side-on.
-	const FVector DesiredSocketOffset(
+void AArcadeJetPawn::OnRep_ReplicatedMovement()
+{
+	if (!IsNetworkSimulatedProxy() || VisualBaseRelativeTransforms.IsEmpty())
+	{
+		Super::OnRep_ReplicatedMovement();
+		return;
+	}
+
+	TMap<TWeakObjectPtr<USceneComponent>, FTransform> PreviousWorldTransforms;
+	for (const TPair<TWeakObjectPtr<USceneComponent>, FTransform>& Entry : VisualBaseRelativeTransforms)
+	{
+		if (USceneComponent* Component = Entry.Key.Get())
+		{
+			PreviousWorldTransforms.Add(Entry.Key, Component->GetComponentTransform());
+		}
+	}
+
+	// The root/collision receives the authoritative network snapshot.
+	Super::OnRep_ReplicatedMovement();
+
+	// Keep presentation where it was before the snapshot. Tick then removes this
+	// visual error smoothly while gameplay collision stays authoritative.
+	for (const TPair<TWeakObjectPtr<USceneComponent>, FTransform>& Entry : PreviousWorldTransforms)
+	{
+		if (USceneComponent* Component = Entry.Key.Get())
+		{
+			Component->SetWorldTransform(Entry.Value, false, nullptr, ETeleportType::TeleportPhysics);
+		}
+	}
+}
+
+void AArcadeJetPawn::SetStrafe(const float Value)
+{
+	StrafeInput = FMath::Clamp(Value, -1.0f, 1.0f);
+}
+
+void AArcadeJetPawn::StartBoost()
+{
+	JetBoost->SetBoostRequested(true);
+}
+
+void AArcadeJetPawn::StopBoost()
+{
+	JetBoost->SetBoostRequested(false);
+}
+
+void AArcadeJetPawn::UpdateCursorInput()
+{
+	float DesiredX = 0.0f;
+	float DesiredY = 0.0f;
+	if (const APlayerController* PlayerController = Cast<APlayerController>(GetController()))
+	{
+		int32 Width = 0;
+		int32 Height = 0;
+		float MouseX = 0.0f;
+		float MouseY = 0.0f;
+		PlayerController->GetViewportSize(Width, Height);
+		if (Width > 0 && Height > 0 && PlayerController->GetMousePosition(MouseX, MouseY))
+		{
+			DesiredX = FMath::Clamp((MouseX / static_cast<float>(Width) - 0.5f) * 2.0f, -1.0f, 1.0f);
+			DesiredY = FMath::Clamp((0.5f - MouseY / static_cast<float>(Height)) * 2.0f, -1.0f, 1.0f);
+		}
+	}
+
+	auto ApplyCurve = [this](const float Value)
+	{
+		const float Absolute = FMath::Abs(Value);
+		if (Absolute <= CursorDeadZone)
+		{
+			return 0.0f;
+		}
+		const float Remapped = (Absolute - CursorDeadZone) / (1.0f - CursorDeadZone);
+		return FMath::Sign(Value) * FMath::Pow(Remapped, CursorResponseExponent);
+	};
+
+	CursorSteering.X = ApplyCurve(DesiredX);
+	CursorSteering.Y = ApplyCurve(DesiredY) * (bInvertMouseY ? 1.0f : -1.0f);
+}
+
+void AArcadeJetPawn::UpdateLocalCamera(const float DeltaSeconds)
+{
+	const FVector2D Steering = FlightMovement->GetSmoothedSteering();
+	const float Strafe = FlightMovement->GetSmoothedStrafe();
+	const float BoostAlpha = JetBoost->GetBoostAlpha();
+	const FVector DesiredOffset(
 		0.0f,
-		FMath::Clamp(SmoothedMouseX, -1.0f, 1.0f) * MaxCameraSideShift - SmoothedStrafeInput * StrafeCameraSideShift,
-		180.0f + FMath::Clamp(SmoothedMouseY, -1.0f, 1.0f) * MaxCameraVerticalShift);
+		Steering.X * MaxCameraSideShift - Strafe * StrafeCameraSideShift,
+		180.0f + Steering.Y * MaxCameraVerticalShift);
 	CurrentCameraSocketOffset = FMath::VInterpTo(
-		CurrentCameraSocketOffset, DesiredSocketOffset, DeltaSeconds, CameraFramingSpeed);
+		CurrentCameraSocketOffset, DesiredOffset, DeltaSeconds, CameraFramingSpeed);
 	CameraBoom->SocketOffset = CurrentCameraSocketOffset;
 	CameraBoom->TargetArmLength = FMath::Lerp(NormalCameraDistance, BoostCameraDistance, BoostAlpha);
 	FollowCamera->SetFieldOfView(FMath::Lerp(NormalFieldOfView, BoostFieldOfView, BoostAlpha));
 	CameraBoom->CameraLagSpeed = CameraLagSpeed;
 }
 
-void AArcadeJetPawn::SetStrafe(const float Value) { StrafeInput = Value; }
-
-void AArcadeJetPawn::StartBoost()
+bool AArcadeJetPawn::IsNetworkSimulatedProxy() const
 {
-	if (!bBoostRequested)
-	{
-		bBoostRequested = true;
-		OnBoostStateChanged(true);
-	}
+	return GetLocalRole() == ROLE_SimulatedProxy;
 }
 
-void AArcadeJetPawn::StopBoost()
+void AArcadeJetPawn::CacheNetworkSmoothedComponents()
 {
-	if (bBoostRequested)
+	VisualBaseRelativeTransforms.Reset();
+	TArray<USceneComponent*> SceneComponents;
+	GetComponents(SceneComponents);
+	for (USceneComponent* Component : SceneComponents)
 	{
-		bBoostRequested = false;
-		OnBoostStateChanged(false);
-	}
-}
-
-void AArcadeJetPawn::UpdateCursorSteering(const float DeltaSeconds)
-{
-	float DesiredSteeringX = 0.0f;
-	float DesiredSteeringY = 0.0f;
-
-	if (const APlayerController* PlayerController = Cast<APlayerController>(GetController()))
-	{
-		int32 ViewportWidth = 0;
-		int32 ViewportHeight = 0;
-		float MouseX = 0.0f;
-		float MouseY = 0.0f;
-		PlayerController->GetViewportSize(ViewportWidth, ViewportHeight);
-
-		if (ViewportWidth > 0 && ViewportHeight > 0 && PlayerController->GetMousePosition(MouseX, MouseY))
+		if (Component && Component != RootComponent && Component != CameraBoom
+			&& Component->GetAttachParent() == RootComponent)
 		{
-			DesiredSteeringX = FMath::Clamp((MouseX / static_cast<float>(ViewportWidth) - 0.5f) * 2.0f, -1.0f, 1.0f);
-			// Screen Y grows downwards, so cursor above centre must produce positive pitch.
-			DesiredSteeringY = FMath::Clamp((0.5f - MouseY / static_cast<float>(ViewportHeight)) * 2.0f, -1.0f, 1.0f);
+			VisualBaseRelativeTransforms.Add(Component, Component->GetRelativeTransform());
 		}
 	}
+}
 
-	auto ApplyResponseCurve = [this](const float Value)
+void AArcadeJetPawn::UpdateNetworkVisualSmoothing(const float DeltaSeconds)
+{
+	for (const TPair<TWeakObjectPtr<USceneComponent>, FTransform>& Entry : VisualBaseRelativeTransforms)
 	{
-		const float AbsoluteValue = FMath::Abs(Value);
-		if (AbsoluteValue <= CursorDeadZone)
+		USceneComponent* Component = Entry.Key.Get();
+		if (!Component)
 		{
-			return 0.0f;
+			continue;
 		}
-		const float Remapped = (AbsoluteValue - CursorDeadZone) / (1.0f - CursorDeadZone);
-		return FMath::Sign(Value) * FMath::Pow(Remapped, CursorResponseExponent);
-	};
 
-	DesiredSteeringX = ApplyResponseCurve(DesiredSteeringX);
-	DesiredSteeringY = ApplyResponseCurve(DesiredSteeringY);
-	SmoothedMouseX = FMath::FInterpTo(SmoothedMouseX, DesiredSteeringX, DeltaSeconds, InputSmoothingSpeed);
-	SmoothedMouseY = FMath::FInterpTo(SmoothedMouseY, DesiredSteeringY, DeltaSeconds, InputSmoothingSpeed);
-}
+		const FTransform& Target = Entry.Value;
+		const FTransform Current = Component->GetRelativeTransform();
+		if (FVector::DistSquared(Current.GetLocation(), Target.GetLocation())
+			> FMath::Square(MaxNetworkVisualError))
+		{
+			Component->SetRelativeTransform(Target);
+			continue;
+		}
 
-void AArcadeJetPawn::RotateAircraft(const float DeltaSeconds)
-{
-	UpdateCursorSteering(DeltaSeconds);
-	const FRotator CurrentRotation = GetActorRotation();
-	TargetYaw = CurrentRotation.Yaw + SmoothedMouseX * MaxYawTurnRate * DeltaSeconds;
-	const float PitchDirection = bInvertMouseY ? 1.0f : -1.0f;
-	TargetPitch = FMath::Clamp(
-		CurrentRotation.Pitch + SmoothedMouseY * PitchDirection * MaxPitchTurnRate * DeltaSeconds,
-		-MaxPitch, MaxPitch);
-
-	const float VisualBank = -SmoothedMouseX * MaxVisualBank;
-	const float StrafeBank = -SmoothedStrafeInput * MaxStrafeBank;
-	// A/D progressively overrides mouse banking. Opposing inputs can no longer
-	// cancel the strafe lean; at full strafe MaxStrafeBank is always reached.
-	const float StrafePriority = FMath::Clamp(FMath::Abs(SmoothedStrafeInput), 0.0f, 1.0f);
-	const float TargetRoll = FMath::Lerp(VisualBank, StrafeBank, StrafePriority);
-	const float SmoothedRoll = FMath::FInterpTo(CurrentRotation.Roll, TargetRoll, DeltaSeconds, RotationResponsiveness);
-	SetActorRotation(FRotator(TargetPitch, TargetYaw, SmoothedRoll));
-}
-
-void AArcadeJetPawn::MoveAircraft(const float DeltaSeconds)
-{
-	const float CurrentForwardSpeed = ForwardSpeed * FMath::Lerp(1.0f, BoostSpeedMultiplier, BoostAlpha);
-	const FVector Velocity = GetActorForwardVector() * CurrentForwardSpeed + GetActorRightVector() * SmoothedStrafeInput * StrafeSpeed;
-	FHitResult Hit;
-	AddActorWorldOffset(Velocity * DeltaSeconds, true, &Hit);
-
-	if (Hit.IsValidBlockingHit())
-	{
-		const FVector RemainingMove = Velocity * DeltaSeconds * (1.0f - Hit.Time);
-		AddActorWorldOffset(FVector::VectorPlaneProject(RemainingMove, Hit.Normal), true);
+		const FVector Location = FMath::VInterpTo(
+			Current.GetLocation(), Target.GetLocation(), DeltaSeconds, NetworkVisualSmoothingSpeed);
+		const FQuat Rotation = FMath::QInterpTo(
+			Current.GetRotation(), Target.GetRotation(), DeltaSeconds, NetworkVisualSmoothingSpeed);
+		Component->SetRelativeLocationAndRotation(Location, Rotation);
 	}
 }
