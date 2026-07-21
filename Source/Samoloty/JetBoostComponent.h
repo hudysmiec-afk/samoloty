@@ -38,8 +38,12 @@ public:
 	UPROPERTY(BlueprintAssignable, Category="Plane|Boost")
 	FBoostEnergyChangedSignature OnBoostEnergyChanged;
 
+	/** Temporary local diagnostics. Disable after the boost issue is resolved. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Plane|Boost|Debug")
+	bool bShowBoostDebug = false;
+
 private:
-	UFUNCTION(Server, Unreliable)
+	UFUNCTION(Server, Reliable)
 	void ServerSetBoostRequested(bool bRequested);
 
 	UFUNCTION()
@@ -47,6 +51,7 @@ private:
 
 	void SetAuthoritativeBoostState(bool bNewBoosting);
 	const UJetStatsComponent* GetStatsComponent() const;
+	void DrawBoostDebug(float MaxEnergy) const;
 
 	UPROPERTY(ReplicatedUsing=OnRep_IsBoosting)
 	bool bIsBoosting = false;

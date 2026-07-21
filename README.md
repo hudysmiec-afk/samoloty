@@ -144,14 +144,14 @@ Komponent Niagara w `BP_PlayerPlane` powinien mieć wyłączone `Auto Activate`.
 Aktualny model sieciowy jest podstawą prototypową:
 
 - serwer wykonuje autorytatywną symulację ruchu,
-- klient właściciela symuluje ruch lokalnie dla szybkiej reakcji,
+- tylko serwer zmienia pozycję samolotu i oblicza zużycie boostu,
 - klient wysyła do serwera znormalizowane wejście sterowania,
-- ruch aktora jest replikowany,
+- każdy klient buforuje snapshoty serwera i interpoluje pozycję, rotację oraz prędkość,
 - energia i stan boostu są kontrolowane przez serwer,
 - kamera, FOV, kursor i HUD są lokalne,
 - efekty boostu reagują na replikowany stan.
 
-System nie posiada jeszcze pełnego bufora komend, rewindu ani zaawansowanej korekcji predykcji. Funkcje te będą potrzebne przed stworzeniem docelowej rozgrywki sieciowej.
+W tej prostej wersji nie ma lokalnej predykcji ani korekcji ruchu, więc wejście klienta jest opóźnione o czas transmisji do serwera. Snapshoty są wyświetlane z krótkim stałym opóźnieniem, a krótkie braki pakietów pokrywa ograniczona ekstrapolacja. Dzięki temu nie powstają dwie niezależne wersje pozycji lub energii boostu. Rewind trafień będzie osobnym systemem dodanym razem z uzbrojeniem.
 
 ### Test dwóch graczy w edytorze
 

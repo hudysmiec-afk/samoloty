@@ -6,7 +6,6 @@
 #include "Camera/CameraComponent.h"
 #include "Components/CapsuleComponent.h"
 #include "Components/InputComponent.h"
-#include "Components/SceneComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "GameFramework/PlayerController.h"
 #include "GameFramework/SpringArmComponent.h"
@@ -15,9 +14,11 @@ AArcadeJetPawn::AArcadeJetPawn()
 {
 	PrimaryActorTick.bCanEverTick = true;
 	SetReplicates(true);
-	SetReplicateMovement(true);
+	// FlightComponent replicates one authoritative server transform to every client.
+	SetReplicateMovement(false);
 	SetNetUpdateFrequency(30.0f);
 	SetMinNetUpdateFrequency(15.0f);
+	SetNetCullDistanceSquared(FMath::Square(500000.0f)); // 5 km in Unreal units.
 
 	Collision = CreateDefaultSubobject<UCapsuleComponent>(TEXT("Collision"));
 	Collision->InitCapsuleSize(110.0f, 240.0f);
@@ -54,7 +55,6 @@ void AArcadeJetPawn::BeginPlay()
 {
 	Super::BeginPlay();
 	JetStats->RecalculateStats();
-	CacheNetworkSmoothedComponents();
 
 	if (APlayerController* PlayerController = Cast<APlayerController>(GetController()))
 	{
@@ -88,41 +88,6 @@ void AArcadeJetPawn::Tick(const float DeltaSeconds)
 		UpdateCursorInput();
 		FlightMovement->SetLocalFlightInput(CursorSteering, StrafeInput);
 		UpdateLocalCamera(DeltaSeconds);
-	}
-	else if (IsNetworkSimulatedProxy())
-	{
-		UpdateNetworkVisualSmoothing(DeltaSeconds);
-	}
-}
-
-void AArcadeJetPawn::OnRep_ReplicatedMovement()
-{
-	if (!IsNetworkSimulatedProxy() || VisualBaseRelativeTransforms.IsEmpty())
-	{
-		Super::OnRep_ReplicatedMovement();
-		return;
-	}
-
-	TMap<TWeakObjectPtr<USceneComponent>, FTransform> PreviousWorldTransforms;
-	for (const TPair<TWeakObjectPtr<USceneComponent>, FTransform>& Entry : VisualBaseRelativeTransforms)
-	{
-		if (USceneComponent* Component = Entry.Key.Get())
-		{
-			PreviousWorldTransforms.Add(Entry.Key, Component->GetComponentTransform());
-		}
-	}
-
-	// The root/collision receives the authoritative network snapshot.
-	Super::OnRep_ReplicatedMovement();
-
-	// Keep presentation where it was before the snapshot. Tick then removes this
-	// visual error smoothly while gameplay collision stays authoritative.
-	for (const TPair<TWeakObjectPtr<USceneComponent>, FTransform>& Entry : PreviousWorldTransforms)
-	{
-		if (USceneComponent* Component = Entry.Key.Get())
-		{
-			Component->SetWorldTransform(Entry.Value, false, nullptr, ETeleportType::TeleportPhysics);
-		}
 	}
 }
 
@@ -189,51 +154,4 @@ void AArcadeJetPawn::UpdateLocalCamera(const float DeltaSeconds)
 	CameraBoom->TargetArmLength = FMath::Lerp(NormalCameraDistance, BoostCameraDistance, BoostAlpha);
 	FollowCamera->SetFieldOfView(FMath::Lerp(NormalFieldOfView, BoostFieldOfView, BoostAlpha));
 	CameraBoom->CameraLagSpeed = CameraLagSpeed;
-}
-
-bool AArcadeJetPawn::IsNetworkSimulatedProxy() const
-{
-	return GetLocalRole() == ROLE_SimulatedProxy;
-}
-
-void AArcadeJetPawn::CacheNetworkSmoothedComponents()
-{
-	VisualBaseRelativeTransforms.Reset();
-	TArray<USceneComponent*> SceneComponents;
-	GetComponents(SceneComponents);
-	for (USceneComponent* Component : SceneComponents)
-	{
-		if (Component && Component != RootComponent && Component != CameraBoom
-			&& Component->GetAttachParent() == RootComponent)
-		{
-			VisualBaseRelativeTransforms.Add(Component, Component->GetRelativeTransform());
-		}
-	}
-}
-
-void AArcadeJetPawn::UpdateNetworkVisualSmoothing(const float DeltaSeconds)
-{
-	for (const TPair<TWeakObjectPtr<USceneComponent>, FTransform>& Entry : VisualBaseRelativeTransforms)
-	{
-		USceneComponent* Component = Entry.Key.Get();
-		if (!Component)
-		{
-			continue;
-		}
-
-		const FTransform& Target = Entry.Value;
-		const FTransform Current = Component->GetRelativeTransform();
-		if (FVector::DistSquared(Current.GetLocation(), Target.GetLocation())
-			> FMath::Square(MaxNetworkVisualError))
-		{
-			Component->SetRelativeTransform(Target);
-			continue;
-		}
-
-		const FVector Location = FMath::VInterpTo(
-			Current.GetLocation(), Target.GetLocation(), DeltaSeconds, NetworkVisualSmoothingSpeed);
-		const FQuat Rotation = FMath::QInterpTo(
-			Current.GetRotation(), Target.GetRotation(), DeltaSeconds, NetworkVisualSmoothingSpeed);
-		Component->SetRelativeLocationAndRotation(Location, Rotation);
-	}
 }

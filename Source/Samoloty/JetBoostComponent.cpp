@@ -1,6 +1,7 @@
 #include "JetBoostComponent.h"
 
 #include "JetStatsComponent.h"
+#include "Engine/Engine.h"
 #include "GameFramework/Actor.h"
 #include "GameFramework/Pawn.h"
 #include "Net/UnrealNetwork.h"
@@ -56,11 +57,32 @@ void UJetBoostComponent::TickComponent(const float DeltaTime, const ELevelTick T
 		}
 	}
 
-	const APawn* OwnerPawn = Cast<APawn>(GetOwner());
-	const bool bUsePredictedState = OwnerPawn && OwnerPawn->IsLocallyControlled() && !GetOwner()->HasAuthority();
-	const bool bVisualBoosting = bUsePredictedState ? bLocalBoostRequested : bIsBoosting;
-	BoostAlpha = FMath::FInterpTo(BoostAlpha, bVisualBoosting ? 1.0f : 0.0f,
+	// The server is the only source of boost truth. Clients smooth the replicated
+	// state but never keep boosting only because Space is still held locally.
+	BoostAlpha = FMath::FInterpTo(BoostAlpha, bIsBoosting ? 1.0f : 0.0f,
 		DeltaTime, Values.BoostResponseSpeed);
+	DrawBoostDebug(Values.MaxBoostEnergy);
+}
+
+void UJetBoostComponent::DrawBoostDebug(const float MaxEnergy) const
+{
+	const APawn* OwnerPawn = Cast<APawn>(GetOwner());
+	if (!bShowBoostDebug || !OwnerPawn || !OwnerPawn->IsLocallyControlled() || !GEngine)
+	{
+		return;
+	}
+
+	const FString AuthorityText = GetOwner()->HasAuthority() ? TEXT("SERVER") : TEXT("CLIENT");
+	const FString Message = FString::Printf(
+		TEXT("BOOST [%s]\nEnergy: %.1f / %.1f\nRequested: %s | Server state: %s | Alpha: %.2f"),
+		*AuthorityText,
+		CurrentEnergy,
+		MaxEnergy,
+		bLocalBoostRequested ? TEXT("YES") : TEXT("NO"),
+		bIsBoosting ? TEXT("ON") : TEXT("OFF"),
+		BoostAlpha);
+	const FColor Color = bIsBoosting ? FColor::Cyan : (CurrentEnergy <= KINDA_SMALL_NUMBER ? FColor::Red : FColor::White);
+	GEngine->AddOnScreenDebugMessage(static_cast<uint64>(GetUniqueID()), 0.0f, Color, Message);
 }
 
 void UJetBoostComponent::SetBoostRequested(const bool bRequested)
@@ -72,7 +94,6 @@ void UJetBoostComponent::SetBoostRequested(const bool bRequested)
 	}
 	else
 	{
-		OnBoostStateChanged.Broadcast(bRequested);
 		ServerSetBoostRequested(bRequested);
 	}
 }

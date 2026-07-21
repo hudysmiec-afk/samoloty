@@ -9,7 +9,6 @@ class UCameraComponent;
 class UCapsuleComponent;
 class UJetBoostComponent;
 class UJetStatsComponent;
-class USceneComponent;
 class USpringArmComponent;
 class UStaticMeshComponent;
 
@@ -23,7 +22,6 @@ public:
 	AArcadeJetPawn();
 	virtual void Tick(float DeltaSeconds) override;
 	virtual void SetupPlayerInputComponent(UInputComponent* PlayerInputComponent) override;
-	virtual void OnRep_ReplicatedMovement() override;
 
 protected:
 	virtual void BeginPlay() override;
@@ -85,26 +83,14 @@ protected:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Plane|Camera", meta=(ClampMin="0"))
 	float BoostCameraDistance = 1350.0f;
 
-	/** Visual error correction speed used only for aircraft observed over the network. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Plane|Networking", meta=(ClampMin="0.1"))
-	float NetworkVisualSmoothingSpeed = 12.0f;
-
-	/** Larger corrections snap immediately to avoid a visual aircraft far away from its collision. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Plane|Networking", meta=(ClampMin="0"))
-	float MaxNetworkVisualError = 1200.0f;
-
 private:
 	void SetStrafe(float Value);
 	void StartBoost();
 	void StopBoost();
 	void UpdateCursorInput();
 	void UpdateLocalCamera(float DeltaSeconds);
-	void CacheNetworkSmoothedComponents();
-	void UpdateNetworkVisualSmoothing(float DeltaSeconds);
-	bool IsNetworkSimulatedProxy() const;
 
 	FVector2D CursorSteering = FVector2D::ZeroVector;
 	float StrafeInput = 0.0f;
 	FVector CurrentCameraSocketOffset = FVector(0.0f, 0.0f, 180.0f);
-	TMap<TWeakObjectPtr<USceneComponent>, FTransform> VisualBaseRelativeTransforms;
 };
