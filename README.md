@@ -139,6 +139,18 @@ Content/Main/SystemNiagara/NS_PlaneTrail
 
 Komponent Niagara w `BP_PlayerPlane` powinien mieć wyłączone `Auto Activate`. Event `On Boost State Changed` przekazuje wartość `bBoosting` do `Set Active`, dzięki czemu smuga działa wyłącznie podczas boostu.
 
+## Rocket Barrage
+
+Prototyp uzbrojenia pod prawym przyciskiem myszy obejmuje serwerowe HP, dwie salwy prostych rakiet, cooldown, proximity damage, efekty Niagara i debug multiplayer. Pełne założenia, wartości początkowe oraz checklista znajdują się w [`Docs/RocketBarrageDesign.md`](Docs/RocketBarrageDesign.md).
+
+Najważniejsze klasy:
+
+```text
+HealthComponent
+RocketWeaponComponent
+RocketProjectile
+```
+
 ## Multiplayer
 
 Aktualny model sieciowy jest podstawą prototypową:

@@ -7,8 +7,11 @@
 class UArcadeFlightComponent;
 class UCameraComponent;
 class UCapsuleComponent;
+class UHealthComponent;
 class UJetBoostComponent;
 class UJetStatsComponent;
+class URocketWeaponComponent;
+class USceneComponent;
 class USpringArmComponent;
 class UStaticMeshComponent;
 
@@ -37,6 +40,18 @@ protected:
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Plane|Components")
 	TObjectPtr<UJetBoostComponent> JetBoost;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Plane|Components")
+	TObjectPtr<UHealthComponent> Health;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Plane|Components")
+	TObjectPtr<URocketWeaponComponent> RocketWeapon;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Plane|Weapons")
+	TObjectPtr<USceneComponent> RocketSpawnLeft;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Plane|Weapons")
+	TObjectPtr<USceneComponent> RocketSpawnRight;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Plane|Components")
 	TObjectPtr<UArcadeFlightComponent> FlightMovement;
@@ -87,6 +102,8 @@ private:
 	void SetStrafe(float Value);
 	void StartBoost();
 	void StopBoost();
+	void StartRocketFire();
+	void StopRocketFire();
 	void UpdateCursorInput();
 	void UpdateLocalCamera(float DeltaSeconds);
 

@@ -58,6 +58,51 @@ struct FJetFlightStats
 	float BoostRegenDelay = 1.0f;
 };
 
+USTRUCT(BlueprintType)
+struct FJetCombatStats
+{
+	GENERATED_BODY()
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Health", meta=(ClampMin="1"))
+	float MaxHealth = 10000.0f;
+};
+
+USTRUCT(BlueprintType)
+struct FRocketBarrageStats
+{
+	GENERATED_BODY()
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Barrage", meta=(ClampMin="1"))
+	int32 SalvoCount = 2;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Barrage", meta=(ClampMin="1"))
+	int32 RocketsPerSalvo = 10;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Barrage", meta=(ClampMin="0"))
+	float SalvoInterval = 0.4f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Barrage", meta=(ClampMin="0"))
+	float Cooldown = 4.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Rocket", meta=(ClampMin="0"))
+	float RocketSpeed = 3000.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Rocket", meta=(ClampMin="0"))
+	float RocketDamage = 100.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Rocket", meta=(ClampMin="0"))
+	float MaxTravelDistance = 200000.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Rocket", meta=(ClampMin="0"))
+	float ProximityRadius = 2000.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Rocket", meta=(ClampMin="0", ClampMax="45"))
+	float SpreadAngleDegrees = 1.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Rocket", meta=(ClampMin="0.016"))
+	float ProximityCheckInterval = 0.1f;
+};
+
 UCLASS(ClassGroup=(Plane), meta=(BlueprintSpawnableComponent))
 class SAMOLOTY_API UJetStatsComponent : public UActorComponent
 {
@@ -70,6 +115,12 @@ public:
 	UFUNCTION(BlueprintPure, Category="Plane|Stats")
 	const FJetFlightStats& GetFlightStats() const { return EffectiveFlightStats; }
 
+	UFUNCTION(BlueprintPure, Category="Plane|Stats")
+	const FJetCombatStats& GetCombatStats() const { return EffectiveCombatStats; }
+
+	UFUNCTION(BlueprintPure, Category="Plane|Stats")
+	const FRocketBarrageStats& GetRocketBarrageStats() const { return EffectiveRocketBarrageStats; }
+
 	UFUNCTION(BlueprintCallable, Category="Plane|Stats")
 	void RecalculateStats();
 
@@ -79,4 +130,16 @@ protected:
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Plane|Stats")
 	FJetFlightStats EffectiveFlightStats;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Plane|Stats")
+	FJetCombatStats BaseCombatStats;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Plane|Stats")
+	FJetCombatStats EffectiveCombatStats;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Plane|Stats")
+	FRocketBarrageStats BaseRocketBarrageStats;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Plane|Stats")
+	FRocketBarrageStats EffectiveRocketBarrageStats;
 };

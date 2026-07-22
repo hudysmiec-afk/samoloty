@@ -4,6 +4,8 @@ UJetStatsComponent::UJetStatsComponent()
 {
 	PrimaryComponentTick.bCanEverTick = false;
 	EffectiveFlightStats = BaseFlightStats;
+	EffectiveCombatStats = BaseCombatStats;
+	EffectiveRocketBarrageStats = BaseRocketBarrageStats;
 }
 
 void UJetStatsComponent::BeginPlay()
@@ -16,4 +18,6 @@ void UJetStatsComponent::RecalculateStats()
 {
 	// Item, perk and passive-tree modifiers will be aggregated here later.
 	EffectiveFlightStats = BaseFlightStats;
+	EffectiveCombatStats = BaseCombatStats;
+	EffectiveRocketBarrageStats = BaseRocketBarrageStats;
 }

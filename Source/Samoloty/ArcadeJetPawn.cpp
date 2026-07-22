@@ -1,11 +1,14 @@
 #include "ArcadeJetPawn.h"
 
 #include "ArcadeFlightComponent.h"
+#include "HealthComponent.h"
 #include "JetBoostComponent.h"
 #include "JetStatsComponent.h"
+#include "RocketWeaponComponent.h"
 #include "Camera/CameraComponent.h"
 #include "Components/CapsuleComponent.h"
 #include "Components/InputComponent.h"
+#include "Components/SceneComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "GameFramework/PlayerController.h"
 #include "GameFramework/SpringArmComponent.h"
@@ -30,8 +33,17 @@ AArcadeJetPawn::AArcadeJetPawn()
 	PlaneMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 
 	JetStats = CreateDefaultSubobject<UJetStatsComponent>(TEXT("JetStats"));
+	Health = CreateDefaultSubobject<UHealthComponent>(TEXT("Health"));
 	JetBoost = CreateDefaultSubobject<UJetBoostComponent>(TEXT("JetBoost"));
 	FlightMovement = CreateDefaultSubobject<UArcadeFlightComponent>(TEXT("FlightMovement"));
+	RocketWeapon = CreateDefaultSubobject<URocketWeaponComponent>(TEXT("RocketWeapon"));
+
+	RocketSpawnLeft = CreateDefaultSubobject<USceneComponent>(TEXT("RocketSpawnLeft"));
+	RocketSpawnLeft->SetupAttachment(Collision);
+	RocketSpawnLeft->SetRelativeLocation(FVector(100.0f, -250.0f, 0.0f));
+	RocketSpawnRight = CreateDefaultSubobject<USceneComponent>(TEXT("RocketSpawnRight"));
+	RocketSpawnRight->SetupAttachment(Collision);
+	RocketSpawnRight->SetRelativeLocation(FVector(100.0f, 250.0f, 0.0f));
 
 	CameraBoom = CreateDefaultSubobject<USpringArmComponent>(TEXT("CameraBoom"));
 	CameraBoom->SetupAttachment(Collision);
@@ -55,6 +67,7 @@ void AArcadeJetPawn::BeginPlay()
 {
 	Super::BeginPlay();
 	JetStats->RecalculateStats();
+	RocketWeapon->SetSpawnPoints(RocketSpawnLeft, RocketSpawnRight);
 
 	if (APlayerController* PlayerController = Cast<APlayerController>(GetController()))
 	{
@@ -78,6 +91,8 @@ void AArcadeJetPawn::SetupPlayerInputComponent(UInputComponent* PlayerInputCompo
 	PlayerInputComponent->BindAxis(TEXT("PlaneStrafe"), this, &AArcadeJetPawn::SetStrafe);
 	PlayerInputComponent->BindAction(TEXT("PlaneBoost"), IE_Pressed, this, &AArcadeJetPawn::StartBoost);
 	PlayerInputComponent->BindAction(TEXT("PlaneBoost"), IE_Released, this, &AArcadeJetPawn::StopBoost);
+	PlayerInputComponent->BindAction(TEXT("PlaneRocketFire"), IE_Pressed, this, &AArcadeJetPawn::StartRocketFire);
+	PlayerInputComponent->BindAction(TEXT("PlaneRocketFire"), IE_Released, this, &AArcadeJetPawn::StopRocketFire);
 }
 
 void AArcadeJetPawn::Tick(const float DeltaSeconds)
@@ -104,6 +119,16 @@ void AArcadeJetPawn::StartBoost()
 void AArcadeJetPawn::StopBoost()
 {
 	JetBoost->SetBoostRequested(false);
+}
+
+void AArcadeJetPawn::StartRocketFire()
+{
+	RocketWeapon->SetFireHeld(true);
+}
+
+void AArcadeJetPawn::StopRocketFire()
+{
+	RocketWeapon->SetFireHeld(false);
 }
 
 void AArcadeJetPawn::UpdateCursorInput()
