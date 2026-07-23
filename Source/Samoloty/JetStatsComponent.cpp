@@ -6,6 +6,7 @@ UJetStatsComponent::UJetStatsComponent()
 	EffectiveFlightStats = BaseFlightStats;
 	EffectiveCombatStats = BaseCombatStats;
 	EffectiveRocketBarrageStats = BaseRocketBarrageStats;
+	EffectiveRifleGunStats = BaseRifleGunStats;
 }
 
 void UJetStatsComponent::BeginPlay()
@@ -20,4 +21,5 @@ void UJetStatsComponent::RecalculateStats()
 	EffectiveFlightStats = BaseFlightStats;
 	EffectiveCombatStats = BaseCombatStats;
 	EffectiveRocketBarrageStats = BaseRocketBarrageStats;
+	EffectiveRifleGunStats = BaseRifleGunStats;
 }

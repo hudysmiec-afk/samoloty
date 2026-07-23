@@ -8,6 +8,7 @@
 - [x] Sterowanie RMB: kliknięcie i ciągły ogień po przytrzymaniu
 - [x] Dwie salwy po dziesięć rakiet oraz cooldown
 - [x] Prosty lot, losowy kontrolowany rozrzut i maksymalny dystans
+- [x] Losowana na nowo dla każdej salwy separacja do jednego wspólnego okręgu przed środkiem samolotu
 - [x] Serwerowe collision sweep, proximity i obrażenia
 - [x] Replikowane trafienie, wybuch i zniszczenie rakiety
 - [x] Blueprint rakiety, Niagara trail i Niagara explosion
@@ -48,11 +49,11 @@
 - Śmierć anuluje niewystrzelone salwy i niszczy Pawn bez respawnu.
 - Dziesięć rakiet salwy startuje jednocześnie: pięć z lewego i pięć z prawego punktu sceny.
 - Kierunki są losowane przez serwer w jednym kontrolowanym stożku; lewa i prawa grupa zachowują swoje strony.
-- Po wystrzeleniu rakieta leci prosto i nie jest naprowadzana.
+- Rakieta najpierw zmierza po indywidualnej krzywej Béziera do punktu we wspólnym okręgu przed środkiem samolotu, a następnie leci prosto i nie jest naprowadzana.
 - Rakiety ignorują właściciela i inne rakiety.
 - Pierwszy cel z HealthComponent w promieniu otrzymuje pełne obrażenia; ściany nie blokują zapalnika.
 - Trafienie otoczenia albo zadanie obrażeń powoduje wybuch i zniszczenie rakiety.
-- Rakieta znika również po osiągnięciu maksymalnego przebytego dystansu.
+- Rakieta wybucha bez zadawania obrażeń po osiągnięciu maksymalnego przebytego dystansu.
 
 ## Rozszerzenia późniejsze
 

@@ -11,6 +11,7 @@ class UHealthComponent;
 class UJetBoostComponent;
 class UJetStatsComponent;
 class URocketWeaponComponent;
+class URifleGunComponent;
 class USceneComponent;
 class USpringArmComponent;
 class UStaticMeshComponent;
@@ -47,11 +48,20 @@ protected:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Plane|Components")
 	TObjectPtr<URocketWeaponComponent> RocketWeapon;
 
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Plane|Components")
+	TObjectPtr<URifleGunComponent> RifleGun;
+
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Plane|Weapons")
 	TObjectPtr<USceneComponent> RocketSpawnLeft;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Plane|Weapons")
 	TObjectPtr<USceneComponent> RocketSpawnRight;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Plane|Weapons")
+	TObjectPtr<USceneComponent> GunMuzzleLeft;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Plane|Weapons")
+	TObjectPtr<USceneComponent> GunMuzzleRight;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Plane|Components")
 	TObjectPtr<UArcadeFlightComponent> FlightMovement;
@@ -104,6 +114,8 @@ private:
 	void StopBoost();
 	void StartRocketFire();
 	void StopRocketFire();
+	void StartRifleFire();
+	void StopRifleFire();
 	void UpdateCursorInput();
 	void UpdateLocalCamera(float DeltaSeconds);
 

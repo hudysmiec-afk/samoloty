@@ -166,10 +166,26 @@ void URocketWeaponComponent::SpawnRocket(USceneComponent* SpawnPoint, const bool
 	const FVector SideOffset = GetOwner()->GetActorRightVector() * FMath::Cos(DiskAngle)
 		+ GetOwner()->GetActorUpVector() * FMath::Sin(DiskAngle);
 	const FVector Direction = (Forward + SideOffset * SpreadTangent * RadiusAlpha).GetSafeNormal();
+	const float SeparationForwardDistance = FMath::Max(0.0f, Stats.SeparationForwardDistance);
+	const FVector SeparationOffset = SideOffset * Stats.SeparationRadius * RadiusAlpha;
+	const FVector StartLocation = SpawnPoint->GetComponentLocation();
+	const FVector CommonFormationCenter = LeftSpawnPoint.IsValid() && RightSpawnPoint.IsValid()
+		? (LeftSpawnPoint->GetComponentLocation() + RightSpawnPoint->GetComponentLocation()) * 0.5f
+		: GetOwner()->GetActorLocation();
+	const FVector SeparationEnd = CommonFormationCenter + Forward * SeparationForwardDistance + SeparationOffset;
+	const FVector LateralTravel = SeparationEnd - (StartLocation + Forward * SeparationForwardDistance);
+	const float ControlHandleLength = SeparationForwardDistance * Stats.SeparationCurveStrength;
+	const FVector ControlPoint1 = StartLocation + Forward * (ControlHandleLength * 0.35f)
+		+ LateralTravel * 0.35f;
+	const FVector ControlPoint2 = SeparationEnd - Direction * ControlHandleLength;
 
 	FRocketLaunchData Data;
-	Data.StartLocation = SpawnPoint->GetComponentLocation();
+	Data.StartLocation = StartLocation;
 	Data.Direction = Direction;
+	Data.SeparationControlPoint1 = ControlPoint1;
+	Data.SeparationControlPoint2 = ControlPoint2;
+	Data.SeparationEndPoint = SeparationEnd;
+	Data.bUseSeparationCurve = SeparationForwardDistance > KINDA_SMALL_NUMBER;
 	Data.Speed = Stats.RocketSpeed;
 	Data.Damage = Stats.RocketDamage;
 	Data.MaxTravelDistance = Stats.MaxTravelDistance;
@@ -179,7 +195,8 @@ void URocketWeaponComponent::SpawnRocket(USceneComponent* SpawnPoint, const bool
 	Data.GuidanceMode = ERocketGuidanceMode::Straight;
 	Data.bDrawDebug = bDrawRocketDebug;
 
-	const FTransform SpawnTransform(Direction.Rotation(), Data.StartLocation);
+	const FVector InitialDirection = (ControlPoint1 - StartLocation).GetSafeNormal(SMALL_NUMBER, Direction);
+	const FTransform SpawnTransform(InitialDirection.Rotation(), Data.StartLocation);
 	APawn* OwnerPawn = Cast<APawn>(GetOwner());
 	ARocketProjectile* Rocket = GetWorld()->SpawnActorDeferred<ARocketProjectile>(RocketClass, SpawnTransform,
 		GetOwner(), OwnerPawn, ESpawnActorCollisionHandlingMethod::AlwaysSpawn);

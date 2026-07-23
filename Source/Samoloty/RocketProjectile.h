@@ -31,6 +31,18 @@ struct FRocketLaunchData
 	FVector_NetQuantizeNormal Direction = FVector::ForwardVector;
 
 	UPROPERTY()
+	FVector_NetQuantize100 SeparationControlPoint1;
+
+	UPROPERTY()
+	FVector_NetQuantize100 SeparationControlPoint2;
+
+	UPROPERTY()
+	FVector_NetQuantize100 SeparationEndPoint;
+
+	UPROPERTY()
+	bool bUseSeparationCurve = false;
+
+	UPROPERTY()
 	float Speed = 0.0f;
 
 	UPROPERTY()
@@ -100,7 +112,12 @@ private:
 	void OnRep_Exploded();
 
 	void ApplyLaunchState();
-	void SimulateStraightMovement(float DeltaSeconds);
+	void SimulateRocketMovement(float DeltaSeconds);
+	void BuildSeparationCurveCache();
+	FVector EvaluateSeparationCurve(float Parameter) const;
+	float FindCurveParameterForDistance(float Distance) const;
+	FVector GetLocationAtDistance(float Distance) const;
+	FVector GetDirectionAtDistance(float Distance) const;
 	bool CheckPhysicalCollision(const FVector& Start, const FVector& End, FHitResult& OutHit) const;
 	AActor* FindProximityTarget() const;
 	void Explode(AActor* DamageTarget, const FVector& ImpactLocation);
@@ -117,6 +134,9 @@ private:
 
 	float DistanceTraveled = 0.0f;
 	float TimeSinceProximityCheck = 0.0f;
+	float SeparationCurveLength = 0.0f;
+	static constexpr int32 SeparationCurveSamples = 16;
+	float SeparationCurveCumulativeDistances[SeparationCurveSamples + 1] = {};
 	bool bInitialized = false;
 	bool bCountedOnServer = false;
 

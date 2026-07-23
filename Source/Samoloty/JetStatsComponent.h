@@ -68,6 +68,33 @@ struct FJetCombatStats
 };
 
 USTRUCT(BlueprintType)
+struct FRifleGunStats
+{
+	GENERATED_BODY()
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Rifle", meta=(ClampMin="0"))
+	float Damage = 50.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Rifle", meta=(ClampMin="0.1"))
+	float ShotsPerSecond = 20.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Rifle", meta=(ClampMin="0"))
+	float MaxRange = 200000.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Rifle", meta=(ClampMin="0", ClampMax="45"))
+	float SpreadAngleDegrees = 0.25f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Rifle|Visual", meta=(ClampMin="1"))
+	float TracerSpeed = 200000.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Rifle|Visual", meta=(ClampMin="1"))
+	float TracerLength = 500.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Rifle|Visual", meta=(ClampMin="0.1"))
+	float TracerWidth = 5.0f;
+};
+
+USTRUCT(BlueprintType)
 struct FRocketBarrageStats
 {
 	GENERATED_BODY()
@@ -99,6 +126,18 @@ struct FRocketBarrageStats
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Rocket", meta=(ClampMin="0", ClampMax="45"))
 	float SpreadAngleDegrees = 1.0f;
 
+	/** Forward length of the distance-driven launch separation curve. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Rocket|Separation", meta=(ClampMin="0"))
+	float SeparationForwardDistance = 800.0f;
+
+	/** Maximum randomized side/up offset reached at the end of separation. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Rocket|Separation", meta=(ClampMin="0"))
+	float SeparationRadius = 125.0f;
+
+	/** Length of Bezier control handles relative to forward separation distance. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Rocket|Separation", meta=(ClampMin="0.05", ClampMax="0.75"))
+	float SeparationCurveStrength = 0.35f;
+
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Rocket", meta=(ClampMin="0.016"))
 	float ProximityCheckInterval = 0.1f;
 };
@@ -121,6 +160,9 @@ public:
 	UFUNCTION(BlueprintPure, Category="Plane|Stats")
 	const FRocketBarrageStats& GetRocketBarrageStats() const { return EffectiveRocketBarrageStats; }
 
+	UFUNCTION(BlueprintPure, Category="Plane|Stats")
+	const FRifleGunStats& GetRifleGunStats() const { return EffectiveRifleGunStats; }
+
 	UFUNCTION(BlueprintCallable, Category="Plane|Stats")
 	void RecalculateStats();
 
@@ -142,4 +184,10 @@ protected:
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Plane|Stats")
 	FRocketBarrageStats EffectiveRocketBarrageStats;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Plane|Stats")
+	FRifleGunStats BaseRifleGunStats;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Plane|Stats")
+	FRifleGunStats EffectiveRifleGunStats;
 };

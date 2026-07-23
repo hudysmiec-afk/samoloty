@@ -77,16 +77,17 @@ void ARocketProjectile::OnRep_LaunchData()
 
 void ARocketProjectile::ApplyLaunchState()
 {
-	FVector Location = LaunchData.StartLocation;
+	BuildSeparationCurveCache();
 	if (!HasAuthority())
 	{
 		const AGameStateBase* GameState = GetWorld()->GetGameState();
 		const double ServerNow = GameState ? GameState->GetServerWorldTimeSeconds() : GetWorld()->GetTimeSeconds();
 		const float Elapsed = FMath::Max(0.0f, static_cast<float>(ServerNow - LaunchData.ServerStartTime));
 		DistanceTraveled = FMath::Min(LaunchData.Speed * Elapsed, LaunchData.MaxTravelDistance);
-		Location += FVector(LaunchData.Direction) * DistanceTraveled;
 	}
-	SetActorLocationAndRotation(Location, FVector(LaunchData.Direction).Rotation(), false, nullptr,
+	const FVector Location = GetLocationAtDistance(DistanceTraveled);
+	const FVector Direction = GetDirectionAtDistance(DistanceTraveled);
+	SetActorLocationAndRotation(Location, Direction.Rotation(), false, nullptr,
 		ETeleportType::TeleportPhysics);
 }
 
@@ -97,15 +98,102 @@ void ARocketProjectile::Tick(const float DeltaSeconds)
 	{
 		return;
 	}
-	SimulateStraightMovement(DeltaSeconds);
+	SimulateRocketMovement(DeltaSeconds);
 }
 
-void ARocketProjectile::SimulateStraightMovement(const float DeltaSeconds)
+void ARocketProjectile::BuildSeparationCurveCache()
+{
+	SeparationCurveLength = 0.0f;
+	SeparationCurveCumulativeDistances[0] = 0.0f;
+	if (!LaunchData.bUseSeparationCurve)
+	{
+		return;
+	}
+
+	FVector PreviousPoint = EvaluateSeparationCurve(0.0f);
+	for (int32 SampleIndex = 1; SampleIndex <= SeparationCurveSamples; ++SampleIndex)
+	{
+		const float Parameter = static_cast<float>(SampleIndex) / SeparationCurveSamples;
+		const FVector Point = EvaluateSeparationCurve(Parameter);
+		SeparationCurveLength += FVector::Distance(PreviousPoint, Point);
+		SeparationCurveCumulativeDistances[SampleIndex] = SeparationCurveLength;
+		PreviousPoint = Point;
+	}
+}
+
+FVector ARocketProjectile::EvaluateSeparationCurve(const float Parameter) const
+{
+	const float T = FMath::Clamp(Parameter, 0.0f, 1.0f);
+	const float OneMinusT = 1.0f - T;
+	const FVector P0 = LaunchData.StartLocation;
+	const FVector P1 = LaunchData.SeparationControlPoint1;
+	const FVector P2 = LaunchData.SeparationControlPoint2;
+	const FVector P3 = LaunchData.SeparationEndPoint;
+	return P0 * (OneMinusT * OneMinusT * OneMinusT)
+		+ P1 * (3.0f * OneMinusT * OneMinusT * T)
+		+ P2 * (3.0f * OneMinusT * T * T)
+		+ P3 * (T * T * T);
+}
+
+float ARocketProjectile::FindCurveParameterForDistance(const float Distance) const
+{
+	if (!LaunchData.bUseSeparationCurve || SeparationCurveLength <= KINDA_SMALL_NUMBER)
+	{
+		return 1.0f;
+	}
+	const float ClampedDistance = FMath::Clamp(Distance, 0.0f, SeparationCurveLength);
+	for (int32 SampleIndex = 1; SampleIndex <= SeparationCurveSamples; ++SampleIndex)
+	{
+		if (SeparationCurveCumulativeDistances[SampleIndex] >= ClampedDistance)
+		{
+			const float PreviousDistance = SeparationCurveCumulativeDistances[SampleIndex - 1];
+			const float SegmentLength = SeparationCurveCumulativeDistances[SampleIndex] - PreviousDistance;
+			const float SegmentAlpha = SegmentLength > KINDA_SMALL_NUMBER
+				? (ClampedDistance - PreviousDistance) / SegmentLength : 0.0f;
+			return (static_cast<float>(SampleIndex - 1) + SegmentAlpha) / SeparationCurveSamples;
+		}
+	}
+	return 1.0f;
+}
+
+FVector ARocketProjectile::GetLocationAtDistance(const float Distance) const
+{
+	if (LaunchData.bUseSeparationCurve && Distance < SeparationCurveLength)
+	{
+		return EvaluateSeparationCurve(FindCurveParameterForDistance(Distance));
+	}
+	const FVector StraightStart = LaunchData.bUseSeparationCurve
+		? FVector(LaunchData.SeparationEndPoint) : FVector(LaunchData.StartLocation);
+	const float StraightDistance = LaunchData.bUseSeparationCurve
+		? FMath::Max(0.0f, Distance - SeparationCurveLength) : Distance;
+	return StraightStart + FVector(LaunchData.Direction) * StraightDistance;
+}
+
+FVector ARocketProjectile::GetDirectionAtDistance(const float Distance) const
+{
+	if (!LaunchData.bUseSeparationCurve || Distance >= SeparationCurveLength)
+	{
+		return FVector(LaunchData.Direction).GetSafeNormal();
+	}
+	const float T = FindCurveParameterForDistance(Distance);
+	const float OneMinusT = 1.0f - T;
+	const FVector P0 = LaunchData.StartLocation;
+	const FVector P1 = LaunchData.SeparationControlPoint1;
+	const FVector P2 = LaunchData.SeparationControlPoint2;
+	const FVector P3 = LaunchData.SeparationEndPoint;
+	const FVector Derivative = (P1 - P0) * (3.0f * OneMinusT * OneMinusT)
+		+ (P2 - P1) * (6.0f * OneMinusT * T)
+		+ (P3 - P2) * (3.0f * T * T);
+	return Derivative.GetSafeNormal(SMALL_NUMBER, FVector(LaunchData.Direction));
+}
+
+void ARocketProjectile::SimulateRocketMovement(const float DeltaSeconds)
 {
 	const FVector Start = GetActorLocation();
 	const float RemainingDistance = FMath::Max(0.0f, LaunchData.MaxTravelDistance - DistanceTraveled);
 	const float StepDistance = FMath::Min(LaunchData.Speed * DeltaSeconds, RemainingDistance);
-	const FVector End = Start + FVector(LaunchData.Direction) * StepDistance;
+	const float NewDistanceTraveled = DistanceTraveled + StepDistance;
+	const FVector End = GetLocationAtDistance(NewDistanceTraveled);
 
 	if (HasAuthority())
 	{
@@ -130,15 +218,17 @@ void ARocketProjectile::SimulateStraightMovement(const float DeltaSeconds)
 		}
 	}
 
-	SetActorLocation(End, false, nullptr, ETeleportType::None);
-	DistanceTraveled += StepDistance;
+	const FVector MovementDirection = (End - Start).GetSafeNormal(
+		SMALL_NUMBER, GetDirectionAtDistance(NewDistanceTraveled));
+	SetActorLocationAndRotation(End, MovementDirection.Rotation(), false, nullptr, ETeleportType::None);
+	DistanceTraveled = NewDistanceTraveled;
 	if (LaunchData.bDrawDebug)
 	{
 		DrawDebugLine(GetWorld(), Start, End, FColor::Cyan, false, 0.15f, 0, 1.0f);
 	}
 	if (HasAuthority() && DistanceTraveled >= LaunchData.MaxTravelDistance - KINDA_SMALL_NUMBER)
 	{
-		Destroy();
+		Explode(nullptr, End);
 	}
 }
 
