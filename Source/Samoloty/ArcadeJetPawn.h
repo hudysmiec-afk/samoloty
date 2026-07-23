@@ -110,6 +110,7 @@ protected:
 
 private:
 	void SetStrafe(float Value);
+	void SetBrake(float Value);
 	void StartBoost();
 	void StopBoost();
 	void StartRocketFire();
@@ -121,5 +122,6 @@ private:
 
 	FVector2D CursorSteering = FVector2D::ZeroVector;
 	float StrafeInput = 0.0f;
+	float BrakeInput = 0.0f;
 	FVector CurrentCameraSocketOffset = FVector(0.0f, 0.0f, 180.0f);
 };

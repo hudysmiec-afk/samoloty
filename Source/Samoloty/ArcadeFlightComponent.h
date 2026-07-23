@@ -52,7 +52,7 @@ public:
 	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
 
 	/** Called by the owning Pawn. Values are normalized to -1..1. */
-	void SetLocalFlightInput(const FVector2D& Steering, float Strafe);
+	void SetLocalFlightInput(const FVector2D& Steering, float Strafe, float Brake);
 
 	UFUNCTION(BlueprintPure, Category="Plane|Flight")
 	FVector2D GetSmoothedSteering() const { return SmoothedSteering; }
@@ -63,9 +63,15 @@ public:
 	UFUNCTION(BlueprintPure, Category="Plane|Flight")
 	float GetCurrentForwardSpeed() const { return CurrentForwardSpeed; }
 
+	UFUNCTION(BlueprintPure, Category="Plane|Flight")
+	float GetCurrentTurnRateMultiplier() const;
+
+	UFUNCTION(BlueprintPure, Category="Plane|Flight")
+	float GetSmoothedBrake() const { return SmoothedBrake; }
+
 private:
 	UFUNCTION(Server, Unreliable)
-	void ServerSetFlightInput(FVector2D Steering, float Strafe, uint16 InputSequence);
+	void ServerSetFlightInput(FVector2D Steering, float Strafe, float Brake, uint16 InputSequence);
 
 	void SimulateFlight(float DeltaTime);
 	void RotateAircraft(float DeltaTime, const struct FJetFlightStats& Stats);
@@ -73,6 +79,7 @@ private:
 	void UpdateReplicatedState();
 	void InterpolateBufferedState();
 	void UpdateLocalPresentationInput(float DeltaTime);
+	float CalculateTurnRateMultiplier(const struct FJetFlightStats& Stats) const;
 
 	UFUNCTION()
 	void OnRep_ServerState();
@@ -95,6 +102,8 @@ private:
 	FVector2D SmoothedSteering = FVector2D::ZeroVector;
 	float RawStrafe = 0.0f;
 	float SmoothedStrafe = 0.0f;
+	float RawBrake = 0.0f;
+	float SmoothedBrake = 0.0f;
 	float CurrentForwardSpeed = 0.0f;
 	FVector CurrentVelocity = FVector::ZeroVector;
 	float TimeSinceInputSent = 0.0f;

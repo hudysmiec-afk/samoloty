@@ -32,14 +32,20 @@ void UArcadeFlightComponent::BeginPlay()
 			ServerState.Rotation = Owner->GetActorRotation();
 			ServerState.ServerTimeSeconds = GetWorld()->GetTimeSeconds();
 		}
+		if (const UJetStatsComponent* StatsComponent = Owner->FindComponentByClass<UJetStatsComponent>())
+		{
+			CurrentForwardSpeed = StatsComponent->GetFlightStats().ForwardSpeed;
+		}
 	}
 }
 
-void UArcadeFlightComponent::SetLocalFlightInput(const FVector2D& Steering, const float Strafe)
+void UArcadeFlightComponent::SetLocalFlightInput(const FVector2D& Steering, const float Strafe,
+	const float Brake)
 {
 	RawSteering.X = FMath::Clamp(Steering.X, -1.0f, 1.0f);
 	RawSteering.Y = FMath::Clamp(Steering.Y, -1.0f, 1.0f);
 	RawStrafe = FMath::Clamp(Strafe, -1.0f, 1.0f);
+	RawBrake = FMath::Clamp(Brake, 0.0f, 1.0f);
 }
 
 void UArcadeFlightComponent::TickComponent(const float DeltaTime, const ELevelTick TickType,
@@ -53,7 +59,7 @@ void UArcadeFlightComponent::TickComponent(const float DeltaTime, const ELevelTi
 		if (TimeSinceInputSent >= InputReplicationInterval)
 		{
 			TimeSinceInputSent = 0.0f;
-			ServerSetFlightInput(RawSteering, RawStrafe, ++LocalInputSequence);
+			ServerSetFlightInput(RawSteering, RawStrafe, RawBrake, ++LocalInputSequence);
 		}
 	}
 
@@ -85,14 +91,16 @@ void UArcadeFlightComponent::UpdateLocalPresentationInput(const float DeltaTime)
 	SmoothedSteering.X = FMath::FInterpTo(SmoothedSteering.X, RawSteering.X, DeltaTime, Stats.InputSmoothingSpeed);
 	SmoothedSteering.Y = FMath::FInterpTo(SmoothedSteering.Y, RawSteering.Y, DeltaTime, Stats.InputSmoothingSpeed);
 	SmoothedStrafe = FMath::FInterpTo(SmoothedStrafe, RawStrafe, DeltaTime, Stats.StrafeResponseSpeed);
+	SmoothedBrake = FMath::FInterpTo(SmoothedBrake, RawBrake, DeltaTime, Stats.InputSmoothingSpeed);
 }
 
 void UArcadeFlightComponent::ServerSetFlightInput_Implementation(
-	const FVector2D Steering, const float Strafe, const uint16 InputSequence)
+	const FVector2D Steering, const float Strafe, const float Brake, const uint16 InputSequence)
 {
 	RawSteering.X = FMath::Clamp(Steering.X, -1.0f, 1.0f);
 	RawSteering.Y = FMath::Clamp(Steering.Y, -1.0f, 1.0f);
 	RawStrafe = FMath::Clamp(Strafe, -1.0f, 1.0f);
+	RawBrake = FMath::Clamp(Brake, 0.0f, 1.0f);
 }
 
 void UArcadeFlightComponent::SimulateFlight(const float DeltaTime)
@@ -107,6 +115,7 @@ void UArcadeFlightComponent::SimulateFlight(const float DeltaTime)
 	SmoothedSteering.X = FMath::FInterpTo(SmoothedSteering.X, RawSteering.X, DeltaTime, Stats.InputSmoothingSpeed);
 	SmoothedSteering.Y = FMath::FInterpTo(SmoothedSteering.Y, RawSteering.Y, DeltaTime, Stats.InputSmoothingSpeed);
 	SmoothedStrafe = FMath::FInterpTo(SmoothedStrafe, RawStrafe, DeltaTime, Stats.StrafeResponseSpeed);
+	SmoothedBrake = FMath::FInterpTo(SmoothedBrake, RawBrake, DeltaTime, Stats.InputSmoothingSpeed);
 	RotateAircraft(DeltaTime, Stats);
 	MoveAircraft(DeltaTime, Stats);
 }
@@ -195,6 +204,9 @@ void UArcadeFlightComponent::InterpolateBufferedState()
 
 	GetOwner()->SetActorLocationAndRotation(RenderLocation, RenderRotation, false, nullptr,
 		ETeleportType::None);
+	const FVector RenderForward = RenderRotation.GetForwardVector();
+	CurrentVelocity = SnapshotBuffer.Num() >= 2 ? SnapshotBuffer[1].Velocity : SnapshotBuffer[0].Velocity;
+	CurrentForwardSpeed = FMath::Max(0.0f, FVector::DotProduct(CurrentVelocity, RenderForward));
 }
 
 void UArcadeFlightComponent::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
@@ -206,9 +218,12 @@ void UArcadeFlightComponent::GetLifetimeReplicatedProps(TArray<FLifetimeProperty
 void UArcadeFlightComponent::RotateAircraft(const float DeltaTime, const FJetFlightStats& Stats)
 {
 	const FRotator CurrentRotation = GetOwner()->GetActorRotation();
-	const float NewYaw = CurrentRotation.Yaw + SmoothedSteering.X * Stats.MaxYawTurnRate * DeltaTime;
+	const float TurnRateMultiplier = CalculateTurnRateMultiplier(Stats);
+
+	const float NewYaw = CurrentRotation.Yaw
+		+ SmoothedSteering.X * Stats.MaxYawTurnRate * TurnRateMultiplier * DeltaTime;
 	const float NewPitch = FMath::Clamp(
-		CurrentRotation.Pitch + SmoothedSteering.Y * Stats.MaxPitchTurnRate * DeltaTime,
+		CurrentRotation.Pitch + SmoothedSteering.Y * Stats.MaxPitchTurnRate * TurnRateMultiplier * DeltaTime,
 		-Stats.MaxPitch, Stats.MaxPitch);
 
 	const float VisualBank = -SmoothedSteering.X * Stats.MaxVisualBank;
@@ -219,11 +234,44 @@ void UArcadeFlightComponent::RotateAircraft(const float DeltaTime, const FJetFli
 	GetOwner()->SetActorRotation(FRotator(NewPitch, NewYaw, NewRoll));
 }
 
+float UArcadeFlightComponent::CalculateTurnRateMultiplier(const FJetFlightStats& Stats) const
+{
+	const float MinimumSpeed = FMath::Min(Stats.MinForwardSpeed, Stats.ForwardSpeed);
+	const float MaximumSpeed = Stats.ForwardSpeed * Stats.BoostSpeedMultiplier;
+	float TurnRateMultiplier = 1.0f;
+	if (CurrentForwardSpeed < Stats.ForwardSpeed)
+	{
+		const float NormalSpeedAlpha = FMath::GetMappedRangeValueClamped(
+			FVector2D(MinimumSpeed, Stats.ForwardSpeed), FVector2D(0.0f, 1.0f), CurrentForwardSpeed);
+		TurnRateMultiplier = FMath::Lerp(Stats.MinSpeedTurnMultiplier, 1.0f, NormalSpeedAlpha);
+	}
+	else if (MaximumSpeed > Stats.ForwardSpeed + KINDA_SMALL_NUMBER)
+	{
+		const float BoostSpeedAlpha = FMath::GetMappedRangeValueClamped(
+			FVector2D(Stats.ForwardSpeed, MaximumSpeed), FVector2D(0.0f, 1.0f), CurrentForwardSpeed);
+		TurnRateMultiplier = FMath::Lerp(1.0f, Stats.BoostSpeedTurnMultiplier, BoostSpeedAlpha);
+	}
+	return TurnRateMultiplier;
+}
+
+float UArcadeFlightComponent::GetCurrentTurnRateMultiplier() const
+{
+	const UJetStatsComponent* StatsComponent = GetOwner()
+		? GetOwner()->FindComponentByClass<UJetStatsComponent>() : nullptr;
+	return StatsComponent ? CalculateTurnRateMultiplier(StatsComponent->GetFlightStats()) : 1.0f;
+}
+
 void UArcadeFlightComponent::MoveAircraft(const float DeltaTime, const FJetFlightStats& Stats)
 {
 	const UJetBoostComponent* Boost = GetOwner()->FindComponentByClass<UJetBoostComponent>();
 	const float BoostAlpha = Boost ? Boost->GetBoostAlpha() : 0.0f;
-	CurrentForwardSpeed = Stats.ForwardSpeed * FMath::Lerp(1.0f, Stats.BoostSpeedMultiplier, BoostAlpha);
+	const float MinimumSpeed = FMath::Min(Stats.MinForwardSpeed, Stats.ForwardSpeed);
+	const float BrakedSpeed = FMath::Lerp(Stats.ForwardSpeed, MinimumSpeed, SmoothedBrake);
+	const float BoostedSpeed = Stats.ForwardSpeed * Stats.BoostSpeedMultiplier;
+	// Boost progressively overrides the brake and has full priority at BoostAlpha == 1.
+	const float TargetForwardSpeed = FMath::Lerp(BrakedSpeed, BoostedSpeed, BoostAlpha);
+	CurrentForwardSpeed = FMath::FInterpTo(CurrentForwardSpeed, TargetForwardSpeed, DeltaTime,
+		Stats.ForwardSpeedResponse);
 	const FVector Velocity = GetOwner()->GetActorForwardVector() * CurrentForwardSpeed
 		+ GetOwner()->GetActorRightVector() * SmoothedStrafe * Stats.StrafeSpeed;
 	CurrentVelocity = Velocity;

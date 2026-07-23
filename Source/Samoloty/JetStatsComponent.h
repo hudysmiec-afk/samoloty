@@ -12,6 +12,14 @@ struct FJetFlightStats
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Flight", meta=(ClampMin="0"))
 	float ForwardSpeed = 3000.0f;
 
+	/** Lowest forward speed reached while the brake key is fully held. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Flight", meta=(ClampMin="0"))
+	float MinForwardSpeed = 1200.0f;
+
+	/** Responsiveness of forward-speed changes, including braking and releasing the brake. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Flight", meta=(ClampMin="0.1"))
+	float ForwardSpeedResponse = 2.5f;
+
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Flight", meta=(ClampMin="0"))
 	float StrafeSpeed = 700.0f;
 
@@ -23,6 +31,14 @@ struct FJetFlightStats
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Flight", meta=(ClampMin="0"))
 	float MaxPitchTurnRate = 42.0f;
+
+	/** Turn-rate multiplier at MinForwardSpeed. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Flight|Turning", meta=(ClampMin="0.1", ClampMax="3"))
+	float MinSpeedTurnMultiplier = 1.25f;
+
+	/** Turn-rate multiplier at full boost speed. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Flight|Turning", meta=(ClampMin="0.1", ClampMax="1"))
+	float BoostSpeedTurnMultiplier = 0.7f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Flight", meta=(ClampMin="0.1"))
 	float InputSmoothingSpeed = 10.0f;

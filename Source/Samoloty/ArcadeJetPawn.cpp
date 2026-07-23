@@ -99,6 +99,7 @@ void AArcadeJetPawn::SetupPlayerInputComponent(UInputComponent* PlayerInputCompo
 	Super::SetupPlayerInputComponent(PlayerInputComponent);
 	check(PlayerInputComponent);
 	PlayerInputComponent->BindAxis(TEXT("PlaneStrafe"), this, &AArcadeJetPawn::SetStrafe);
+	PlayerInputComponent->BindAxis(TEXT("PlaneBrake"), this, &AArcadeJetPawn::SetBrake);
 	PlayerInputComponent->BindAction(TEXT("PlaneBoost"), IE_Pressed, this, &AArcadeJetPawn::StartBoost);
 	PlayerInputComponent->BindAction(TEXT("PlaneBoost"), IE_Released, this, &AArcadeJetPawn::StopBoost);
 	PlayerInputComponent->BindAction(TEXT("PlaneRocketFire"), IE_Pressed, this, &AArcadeJetPawn::StartRocketFire);
@@ -113,7 +114,7 @@ void AArcadeJetPawn::Tick(const float DeltaSeconds)
 	if (IsLocallyControlled())
 	{
 		UpdateCursorInput();
-		FlightMovement->SetLocalFlightInput(CursorSteering, StrafeInput);
+		FlightMovement->SetLocalFlightInput(CursorSteering, StrafeInput, BrakeInput);
 		UpdateLocalCamera(DeltaSeconds);
 	}
 }
@@ -121,6 +122,11 @@ void AArcadeJetPawn::Tick(const float DeltaSeconds)
 void AArcadeJetPawn::SetStrafe(const float Value)
 {
 	StrafeInput = FMath::Clamp(Value, -1.0f, 1.0f);
+}
+
+void AArcadeJetPawn::SetBrake(const float Value)
+{
+	BrakeInput = FMath::Clamp(Value, 0.0f, 1.0f);
 }
 
 void AArcadeJetPawn::StartBoost()
