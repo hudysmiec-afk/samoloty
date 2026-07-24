@@ -148,14 +148,6 @@ Główna kapsuła jest obecnie zarówno kolizją ruchu, jak i uproszczonym celem
 
 Do testu dwóch graczy w edytorze ustaw `Number of Players = 2`, `Play As Listen Server`, osobne okna i umieść na mapie co najmniej dwa rozstawione `Player Start`.
 
-## Budowanie
-
-```powershell
-X:\Programy\EpicCore\UE_5.8\Engine\Build\BatchFiles\Build.bat SamolotyEditor Win64 Development -Project="X:\Dane\Projekty_UE\Samoloty\Samoloty.uproject" -WaitMutex -FromMsBuild
-```
-
-Przed pełną kompilacją zamknij Unreal Editor albo wyłącz Live Coding. Nie dodawaj ręcznie folderów `Binaries`, `Intermediate`, `Saved` ani `DerivedDataCache`.
-
 ## Praca z Git
 
 Przed pracą:
