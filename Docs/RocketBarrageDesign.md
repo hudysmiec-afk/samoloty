@@ -12,6 +12,8 @@
 - [x] Serwerowe collision sweep, proximity i obrażenia
 - [x] Replikowane trafienie, wybuch i zniszczenie rakiety
 - [x] Blueprint rakiety, Niagara trail i Niagara explosion
+- [x] Przestrzenny dźwięk wystrzału odtwarzany raz na salwę
+- [x] Przestrzenny dźwięk eksplozji odtwarzany przez każdą rakietę
 - [x] Przekazywanie ProximityRadius do `User.ExplosionRadius`
 - [x] Debug HP, salw, cooldownu oraz liczby rakiet
 - [x] Build SamolotyEditor
@@ -66,7 +68,12 @@
 - `Content/Main/Blueprints/BP_RocketProjectile`
 - `Content/Main/SystemNiagara/NS_RocketExplosion`
 - `Content/Main/SystemNiagara/NS_RocketTrail`
+- `Content/Main/Audio/Weapons/SW_RocketLaunch`
+- `Content/Main/Audio/Weapons/SW_RocketExplosion`
+- `Content/Main/Audio/Weapons/ATT_Global`
 - `Content/ArrowTrail`
 - `Content/RocketThrusterExhaustFX`
 
 Paczki VFX z Fab zostały zachowane w całości wraz z zależnościami. Systemy Niagara wymagające starszych sygnatur modułów zostały w edytorze odświeżone przez usunięcie i ponowne dodanie wadliwych wywołań.
+
+`RocketLaunchSound` znajduje się w `RocketWeaponComponent`, ponieważ dotyczy uruchomienia całej salwy. `ExplosionSound` znajduje się w `RocketProjectile`, ponieważ wystrzelona rakieta pozostaje samodzielna również po śmierci właściciela.
