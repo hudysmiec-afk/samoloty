@@ -20,6 +20,22 @@ struct FJetFlightStats
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Flight", meta=(ClampMin="0.1"))
 	float ForwardSpeedResponse = 2.5f;
 
+	/** Target-speed multiplier while flying vertically upward. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Flight|Direction Speed", meta=(ClampMin="0.1", ClampMax="1"))
+	float MaxClimbSpeedMultiplier = 0.75f;
+
+	/** Target-speed multiplier while flying vertically downward. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Flight|Direction Speed", meta=(ClampMin="1", ClampMax="3"))
+	float MaxDiveSpeedMultiplier = 1.25f;
+
+	/** ForwardSpeedResponse multiplier while flying vertically upward. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Flight|Direction Speed", meta=(ClampMin="0.1", ClampMax="1"))
+	float MaxClimbResponseMultiplier = 0.65f;
+
+	/** ForwardSpeedResponse multiplier while flying vertically downward. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Flight|Direction Speed", meta=(ClampMin="1", ClampMax="3"))
+	float MaxDiveResponseMultiplier = 1.35f;
+
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Flight", meta=(ClampMin="0"))
 	float StrafeSpeed = 700.0f;
 

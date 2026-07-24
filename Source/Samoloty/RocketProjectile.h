@@ -8,6 +8,7 @@ class UHealthComponent;
 class UNiagaraComponent;
 class UNiagaraSystem;
 class USceneComponent;
+class USoundBase;
 class UStaticMeshComponent;
 
 DECLARE_MULTICAST_DELEGATE_OneParam(FRocketFinishedSignature, class ARocketProjectile*);
@@ -97,6 +98,10 @@ protected:
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Rocket|Effects")
 	TObjectPtr<UNiagaraSystem> ExplosionEffect;
+
+	/** Local 3D sound played wherever the replicated explosion occurs. Accepts Sound Wave or Sound Cue. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Rocket|Effects")
+	TObjectPtr<USoundBase> ExplosionSound;
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Rocket|Collision", meta=(ClampMin="1"))
 	float PhysicalCollisionRadius = 25.0f;

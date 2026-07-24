@@ -269,9 +269,32 @@ void UArcadeFlightComponent::MoveAircraft(const float DeltaTime, const FJetFligh
 	const float BrakedSpeed = FMath::Lerp(Stats.ForwardSpeed, MinimumSpeed, SmoothedBrake);
 	const float BoostedSpeed = Stats.ForwardSpeed * Stats.BoostSpeedMultiplier;
 	// Boost progressively overrides the brake and has full priority at BoostAlpha == 1.
-	const float TargetForwardSpeed = FMath::Lerp(BrakedSpeed, BoostedSpeed, BoostAlpha);
+	const float PlayerTargetSpeed = FMath::Lerp(BrakedSpeed, BoostedSpeed, BoostAlpha);
+
+	// Arcade gravity: direction changes speed/acceleration only. It never adds downward movement.
+	const float VerticalDirection = FVector::DotProduct(
+		GetOwner()->GetActorForwardVector(), FVector::UpVector);
+	float DirectionSpeedMultiplier = 1.0f;
+	float DirectionResponseMultiplier = 1.0f;
+	if (VerticalDirection >= 0.0f)
+	{
+		DirectionSpeedMultiplier = FMath::Lerp(
+			1.0f, Stats.MaxClimbSpeedMultiplier, VerticalDirection);
+		DirectionResponseMultiplier = FMath::Lerp(
+			1.0f, Stats.MaxClimbResponseMultiplier, VerticalDirection);
+	}
+	else
+	{
+		const float DiveAmount = -VerticalDirection;
+		DirectionSpeedMultiplier = FMath::Lerp(
+			1.0f, Stats.MaxDiveSpeedMultiplier, DiveAmount);
+		DirectionResponseMultiplier = FMath::Lerp(
+			1.0f, Stats.MaxDiveResponseMultiplier, DiveAmount);
+	}
+
+	const float TargetForwardSpeed = PlayerTargetSpeed * DirectionSpeedMultiplier;
 	CurrentForwardSpeed = FMath::FInterpTo(CurrentForwardSpeed, TargetForwardSpeed, DeltaTime,
-		Stats.ForwardSpeedResponse);
+		Stats.ForwardSpeedResponse * DirectionResponseMultiplier);
 	const FVector Velocity = GetOwner()->GetActorForwardVector() * CurrentForwardSpeed
 		+ GetOwner()->GetActorRightVector() * SmoothedStrafe * Stats.StrafeSpeed;
 	CurrentVelocity = Velocity;

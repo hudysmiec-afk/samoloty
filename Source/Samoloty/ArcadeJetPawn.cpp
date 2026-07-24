@@ -3,6 +3,7 @@
 #include "ArcadeFlightComponent.h"
 #include "HealthComponent.h"
 #include "JetBoostComponent.h"
+#include "JetEngineAudioComponent.h"
 #include "JetStatsComponent.h"
 #include "RocketWeaponComponent.h"
 #include "RifleGunComponent.h"
@@ -36,6 +37,7 @@ AArcadeJetPawn::AArcadeJetPawn()
 	JetStats = CreateDefaultSubobject<UJetStatsComponent>(TEXT("JetStats"));
 	Health = CreateDefaultSubobject<UHealthComponent>(TEXT("Health"));
 	JetBoost = CreateDefaultSubobject<UJetBoostComponent>(TEXT("JetBoost"));
+	JetEngineAudio = CreateDefaultSubobject<UJetEngineAudioComponent>(TEXT("JetEngineAudio"));
 	FlightMovement = CreateDefaultSubobject<UArcadeFlightComponent>(TEXT("FlightMovement"));
 	RocketWeapon = CreateDefaultSubobject<URocketWeaponComponent>(TEXT("RocketWeapon"));
 	RifleGun = CreateDefaultSubobject<URifleGunComponent>(TEXT("RifleGun"));

@@ -8,6 +8,7 @@
 #include "Engine/World.h"
 #include "GameFramework/GameStateBase.h"
 #include "GameFramework/Pawn.h"
+#include "Kismet/GameplayStatics.h"
 #include "Net/UnrealNetwork.h"
 
 URocketWeaponComponent::URocketWeaponComponent()
@@ -123,6 +124,13 @@ void URocketWeaponComponent::FireSalvo()
 			bLeft ? LeftIndex++ : RightIndex++, bLeft ? LeftCount : RightCount, RandomStream);
 	}
 
+	if (RocketLaunchSound && LeftSpawnPoint.IsValid() && RightSpawnPoint.IsValid())
+	{
+		const FVector LaunchSoundLocation =
+			(LeftSpawnPoint->GetComponentLocation() + RightSpawnPoint->GetComponentLocation()) * 0.5f;
+		MulticastPlaySalvoLaunchSound(LaunchSoundLocation);
+	}
+
 	++SalvosFired;
 	if (SalvosFired >= FMath::Max(1, Stats.SalvoCount))
 	{
@@ -132,6 +140,15 @@ void URocketWeaponComponent::FireSalvo()
 	{
 		WeaponState = ERocketWeaponState::FiringSalvos;
 		NextActionServerTime = GetWorld()->GetTimeSeconds() + FMath::Max(0.0f, Stats.SalvoInterval);
+	}
+}
+
+void URocketWeaponComponent::MulticastPlaySalvoLaunchSound_Implementation(
+	const FVector_NetQuantize Location)
+{
+	if (RocketLaunchSound && GetNetMode() != NM_DedicatedServer)
+	{
+		UGameplayStatics::SpawnSoundAtLocation(this, RocketLaunchSound, Location);
 	}
 }
 

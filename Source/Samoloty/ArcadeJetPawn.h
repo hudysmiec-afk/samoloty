@@ -9,6 +9,7 @@ class UCameraComponent;
 class UCapsuleComponent;
 class UHealthComponent;
 class UJetBoostComponent;
+class UJetEngineAudioComponent;
 class UJetStatsComponent;
 class URocketWeaponComponent;
 class URifleGunComponent;
@@ -41,6 +42,9 @@ protected:
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Plane|Components")
 	TObjectPtr<UJetBoostComponent> JetBoost;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Plane|Components")
+	TObjectPtr<UJetEngineAudioComponent> JetEngineAudio;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Plane|Components")
 	TObjectPtr<UHealthComponent> Health;

@@ -317,6 +317,10 @@ void ARocketProjectile::PlayExplosionCosmetics()
 {
 	RocketMesh->SetVisibility(false, true);
 	RocketTrail->Deactivate();
+	if (ExplosionSound && GetNetMode() != NM_DedicatedServer)
+	{
+		UGameplayStatics::SpawnSoundAtLocation(this, ExplosionSound, ExplosionLocation);
+	}
 	if (ExplosionEffect)
 	{
 		UNiagaraComponent* ExplosionComponent = UNiagaraFunctionLibrary::SpawnSystemAtLocation(

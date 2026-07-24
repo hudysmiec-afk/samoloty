@@ -6,6 +6,7 @@
 
 class ARocketProjectile;
 class USceneComponent;
+class USoundBase;
 
 UENUM(BlueprintType)
 enum class ERocketWeaponState : uint8
@@ -45,9 +46,16 @@ protected:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Plane|Weapons")
 	TSubclassOf<ARocketProjectile> RocketClass;
 
+	/** Local 3D sound played once for each complete salvo, not once per rocket. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Plane|Weapons|Effects")
+	TObjectPtr<USoundBase> RocketLaunchSound;
+
 private:
 	UFUNCTION(Server, Reliable)
 	void ServerSetFireHeld(bool bHeld);
+
+	UFUNCTION(NetMulticast, Unreliable)
+	void MulticastPlaySalvoLaunchSound(FVector_NetQuantize Location);
 
 	void SetAuthoritativeFireHeld(bool bHeld);
 	void StartBarrage();

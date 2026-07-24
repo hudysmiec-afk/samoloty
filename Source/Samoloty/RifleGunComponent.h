@@ -7,6 +7,7 @@
 class ARifleTracerVisual;
 class UNiagaraSystem;
 class USceneComponent;
+class USoundBase;
 
 UCLASS(ClassGroup=(Plane), meta=(BlueprintSpawnableComponent))
 class SAMOLOTY_API URifleGunComponent : public UActorComponent
@@ -40,6 +41,12 @@ protected:
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Plane|Weapons|Rifle|Visual")
 	TObjectPtr<UNiagaraSystem> ImpactEffect;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Plane|Weapons|Rifle|Audio")
+	TObjectPtr<USoundBase> RifleFireSound;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Plane|Weapons|Rifle|Audio")
+	TObjectPtr<USoundBase> RifleImpactSound;
 
 private:
 	UFUNCTION(Server, Reliable)

@@ -187,11 +187,32 @@ void URifleGunComponent::PlayShotVisual(const FVector& Start, const FVector& End
 	}
 	if (MuzzleFlashEffect)
 	{
-		UNiagaraFunctionLibrary::SpawnSystemAtLocation(GetWorld(), MuzzleFlashEffect, Start, Direction.Rotation());
+		if (USceneComponent* Muzzle = GetMuzzle(MuzzleIndex))
+		{
+			UNiagaraFunctionLibrary::SpawnSystemAttached(
+				MuzzleFlashEffect,
+				Muzzle,
+				NAME_None,
+				FVector::ZeroVector,
+				FRotator::ZeroRotator,
+				EAttachLocation::SnapToTarget,
+				true,
+				true,
+				ENCPoolMethod::None,
+				true);
+		}
+	}
+	if (RifleFireSound && GetNetMode() != NM_DedicatedServer)
+	{
+		UGameplayStatics::SpawnSoundAtLocation(this, RifleFireSound, Start);
 	}
 	if (bHit && ImpactEffect)
 	{
 		UNiagaraFunctionLibrary::SpawnSystemAtLocation(GetWorld(), ImpactEffect, End, (-Direction).Rotation());
+	}
+	if (bHit && RifleImpactSound && GetNetMode() != NM_DedicatedServer)
+	{
+		UGameplayStatics::SpawnSoundAtLocation(this, RifleImpactSound, End);
 	}
 	if (bDrawShotDebug)
 	{
