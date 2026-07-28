@@ -213,6 +213,10 @@ public:
 	UFUNCTION(BlueprintCallable, Category="Plane|Stats")
 	void RecalculateStats();
 
+	void SetBaseFlightStats(const FJetFlightStats& InStats) { BaseFlightStats = InStats; }
+	void SetBaseCombatStats(const FJetCombatStats& InStats) { BaseCombatStats = InStats; }
+	void SetBaseRifleGunStats(const FRifleGunStats& InStats) { BaseRifleGunStats = InStats; }
+
 protected:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Plane|Stats")
 	FJetFlightStats BaseFlightStats;

@@ -73,6 +73,9 @@ public:
 	float GetCurrentForwardSpeed() const { return CurrentForwardSpeed; }
 
 	UFUNCTION(BlueprintPure, Category="Plane|Flight")
+	FVector GetCurrentVelocity() const { return CurrentVelocity; }
+
+	UFUNCTION(BlueprintPure, Category="Plane|Flight")
 	float GetCurrentTurnRateMultiplier() const;
 
 	UFUNCTION(BlueprintPure, Category="Plane|Flight")

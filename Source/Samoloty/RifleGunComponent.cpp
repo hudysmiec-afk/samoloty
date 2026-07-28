@@ -138,8 +138,14 @@ bool URifleGunComponent::BuildShot(const uint8 MuzzleIndex, const bool bApplyDam
 		if (bApplyDamage && Hit.GetActor())
 		{
 			const APawn* OwnerPawn = Cast<APawn>(GetOwner());
-			UGameplayStatics::ApplyDamage(Hit.GetActor(), Stats.Damage,
-				OwnerPawn ? OwnerPawn->GetController() : nullptr, GetOwner(), nullptr);
+			const APawn* HitPawn = Cast<APawn>(Hit.GetActor());
+			const bool bMayDamage = !bDamagePlayersOnly
+				|| (HitPawn && HitPawn->IsPlayerControlled());
+			if (bMayDamage)
+			{
+				UGameplayStatics::ApplyDamage(Hit.GetActor(), Stats.Damage,
+					OwnerPawn ? OwnerPawn->GetController() : nullptr, GetOwner(), nullptr);
+			}
 		}
 	}
 	return true;

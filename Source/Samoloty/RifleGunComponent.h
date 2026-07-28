@@ -22,6 +22,7 @@ public:
 	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
 
 	void SetMuzzlePoints(USceneComponent* InLeftMuzzle, USceneComponent* InRightMuzzle);
+	void SetDamagePlayersOnly(bool bEnabled) { bDamagePlayersOnly = bEnabled; }
 
 	UFUNCTION(BlueprintCallable, Category="Plane|Weapons|Rifle")
 	void SetFireHeld(bool bHeld);
@@ -69,6 +70,7 @@ private:
 	TWeakObjectPtr<USceneComponent> RightMuzzle;
 	bool bLocalFireHeld = false;
 	bool bServerFireHeld = false;
+	bool bDamagePlayersOnly = false;
 	uint8 LocalMuzzleIndex = 0;
 	uint8 ServerMuzzleIndex = 0;
 	double NextLocalShotTime = 0.0;

@@ -49,6 +49,7 @@ Sterowanie zależy od pozycji kursora względem środka ekranu, a nie od szybko�
 - Niagara dla rakiet, eksplozji, muzzle flash i trafień RifleGun,
 - przestrzenne dźwięki broni oraz trzywarstwowy dźwięk silnika,
 - debug HP, boosta, prędkości, zwrotności, rakiet i RifleGun.
+- lekki, serwerowy przeciwnik lotniczy wykonujący powtarzane naloty RifleGun.
 
 ## Architektura
 
@@ -112,12 +113,15 @@ Warstwa slow reaguje na `S`, a boost ma nad nią priorytet. Na serwerze dedykowa
 - `ARocketProjectile` — ruch, sweep, proximity, obrażenia, Niagara i dźwięk eksplozji.
 - `URifleGunComponent` — szybkostrzelność, serwerowy hitscan, obrażenia i synchronizacja kosmetyki.
 - `ARifleTracerVisual` — lekki, niereplikowany wizualny pocisk bez kolizji i damage.
+- `AEnemyPlanePawn` — konfigurowalna baza Blueprinta przeciwnika z boxem kolizji.
+- `UEnemyPlaneAIComponent` — roaming, wybór gracza, nalot, odlot, nawrót i wygładzanie sieciowe.
 
 Dokładne założenia znajdują się w:
 
 - [`Docs/RocketBarrageDesign.md`](Docs/RocketBarrageDesign.md)
 - [`Docs/RifleGunDesign.md`](Docs/RifleGunDesign.md)
 - [`Docs/FlightAndAudio.md`](Docs/FlightAndAudio.md)
+- [`Docs/EnemyPlaneAI.md`](Docs/EnemyPlaneAI.md)
 
 ## Konfiguracja `BP_PlayerPlane`
 
@@ -191,7 +195,7 @@ Nie edytuj równocześnie tego samego `.uasset` lub `.umap` na kilku branchach �
 - [ ] Drużyny i blokada friendly fire
 - [ ] Rakiety naprowadzane
 - [ ] Server rewind dla szybkiej broni
-- [ ] Przeciwnicy AI
+- [x] Pierwszy przeciwnik AI z RifleGun
 - [ ] Przedmioty, perki i drzewko pasywne
 
 ## Status
