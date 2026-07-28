@@ -23,8 +23,10 @@ git lfs pull
 | `A` / `D` | Strafe w lewo / prawo |
 | `S` | Płynne zwolnienie do prędkości minimalnej |
 | `Spacja` | Boost/dopalacz |
+| `B` | Włączenie lub opuszczenie pionowego zawisu |
 | Lewy przycisk myszy | Ciągły ogień RifleGun |
-| Prawy przycisk myszy | Salwa rakiet; przytrzymanie ponawia atak po cooldownie |
+| Prawy przycisk myszy | Salwa rakiet; w pełnym zawisie swobodny obrót kamery |
+| Kółko myszy | Zbliżenie/oddalenie kamery w pełnym zawisie |
 
 Sterowanie zależy od pozycji kursora względem środka ekranu, a nie od szybkości ruchu myszy. Maksymalne prędkości obrotu są ograniczone przez statystyki samolotu.
 
@@ -34,6 +36,8 @@ Sterowanie zależy od pozycji kursora względem środka ekranu, a nie od szybko�
 - sterowanie widocznym kursorem, martwa strefa i krzywa reakcji,
 - płynny strafe oraz osobne przechylenia wizualne skrętu i strafe,
 - kamera pościgowa z dynamicznym kadrowaniem, FOV i odległością boosta,
+- pionowy tryb zawisu z serwerowym stanem, swobodną kamerą i blokadą broni,
+- regulowane, szybkie podążanie obrotu kamery za kierunkiem samolotu,
 - zwalnianie pod `S` z regulowaną prędkością minimalną,
 - boost z energią, regeneracją i opóźnieniem regeneracji,
 - boost ma priorytet nad zwalnianiem,
@@ -177,6 +181,7 @@ Nie edytuj równocześnie tego samego `.uasset` lub `.umap` na kilku branchach �
 - [x] RifleGun hitscan
 - [x] Podstawowe VFX i audio uzbrojenia
 - [x] Trzywarstwowe audio silnika
+- [x] Pionowy tryb zawisu i swobodna kamera
 - [ ] Własny celownik i HUD
 - [ ] Pasek HP i energii boostu
 - [ ] Dokładne hitboxy oraz kanał `WeaponTrace`

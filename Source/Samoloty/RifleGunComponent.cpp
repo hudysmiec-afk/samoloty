@@ -1,5 +1,6 @@
 #include "RifleGunComponent.h"
 
+#include "ArcadeFlightComponent.h"
 #include "HealthComponent.h"
 #include "JetStatsComponent.h"
 #include "RifleTracerVisual.h"
@@ -66,8 +67,11 @@ void URifleGunComponent::TickComponent(const float DeltaTime, const ELevelTick T
 	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
 	const UJetStatsComponent* Stats = GetOwner()->FindComponentByClass<UJetStatsComponent>();
 	const UHealthComponent* Health = GetOwner()->FindComponentByClass<UHealthComponent>();
-	if (!Stats || (Health && Health->IsDead()))
+	const UArcadeFlightComponent* Flight = GetOwner()->FindComponentByClass<UArcadeFlightComponent>();
+	if (!Stats || (Health && Health->IsDead())
+		|| (Flight && Flight->GetHoverState() == EArcadeHoverState::Hovering))
 	{
+		DrawRifleDebug();
 		return;
 	}
 

@@ -48,11 +48,72 @@ void UArcadeFlightComponent::SetLocalFlightInput(const FVector2D& Steering, cons
 	RawBrake = FMath::Clamp(Brake, 0.0f, 1.0f);
 }
 
+void UArcadeFlightComponent::ToggleHover()
+{
+	if (GetOwner()->HasAuthority())
+	{
+		SetAuthoritativeHoverState(
+			HoverState == EArcadeHoverState::Flying || HoverState == EArcadeHoverState::Leaving
+				? EArcadeHoverState::Entering : EArcadeHoverState::Leaving);
+	}
+	else
+	{
+		ServerToggleHover();
+	}
+}
+
+void UArcadeFlightComponent::RequestExitHover()
+{
+	if (GetOwner()->HasAuthority())
+	{
+		if (HoverState != EArcadeHoverState::Flying)
+		{
+			SetAuthoritativeHoverState(EArcadeHoverState::Leaving);
+		}
+	}
+	else
+	{
+		ServerRequestExitHover();
+	}
+}
+
+void UArcadeFlightComponent::ServerToggleHover_Implementation()
+{
+	ToggleHover();
+}
+
+void UArcadeFlightComponent::ServerRequestExitHover_Implementation()
+{
+	RequestExitHover();
+}
+
+void UArcadeFlightComponent::SetAuthoritativeHoverState(const EArcadeHoverState NewState)
+{
+	if (!GetOwner()->HasAuthority() || HoverState == NewState)
+	{
+		return;
+	}
+	HoverState = NewState;
+	if (NewState == EArcadeHoverState::Entering)
+	{
+		if (UJetBoostComponent* Boost = GetOwner()->FindComponentByClass<UJetBoostComponent>())
+		{
+			Boost->SetBoostRequested(false);
+		}
+	}
+	GetOwner()->ForceNetUpdate();
+}
+
 void UArcadeFlightComponent::TickComponent(const float DeltaTime, const ELevelTick TickType,
 	FActorComponentTickFunction* ThisTickFunction)
 {
 	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
 	const APawn* OwnerPawn = Cast<APawn>(GetOwner());
+	const UJetStatsComponent* StatsComponent = GetOwner()->FindComponentByClass<UJetStatsComponent>();
+	if (StatsComponent)
+	{
+		UpdateHoverPresentation(DeltaTime, StatsComponent->GetFlightStats());
+	}
 	if (OwnerPawn && OwnerPawn->IsLocallyControlled() && !GetOwner()->HasAuthority())
 	{
 		TimeSinceInputSent += DeltaTime;
@@ -77,6 +138,14 @@ void UArcadeFlightComponent::TickComponent(const float DeltaTime, const ELevelTi
 		}
 		InterpolateBufferedState();
 	}
+}
+
+void UArcadeFlightComponent::UpdateHoverPresentation(const float DeltaTime, const FJetFlightStats& Stats)
+{
+	const bool bHoverActive = HoverState == EArcadeHoverState::Entering
+		|| HoverState == EArcadeHoverState::Hovering;
+	HoverPresentationAlpha = FMath::FInterpTo(HoverPresentationAlpha, bHoverActive ? 1.0f : 0.0f,
+		DeltaTime, Stats.HoverRotationResponse);
 }
 
 void UArcadeFlightComponent::UpdateLocalPresentationInput(const float DeltaTime)
@@ -213,11 +282,29 @@ void UArcadeFlightComponent::GetLifetimeReplicatedProps(TArray<FLifetimeProperty
 {
 	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
 	DOREPLIFETIME(UArcadeFlightComponent, ServerState);
+	DOREPLIFETIME(UArcadeFlightComponent, HoverState);
 }
 
 void UArcadeFlightComponent::RotateAircraft(const float DeltaTime, const FJetFlightStats& Stats)
 {
 	const FRotator CurrentRotation = GetOwner()->GetActorRotation();
+	if (HoverState != EArcadeHoverState::Flying)
+	{
+		const float TargetPitch = HoverState == EArcadeHoverState::Leaving ? 0.0f : Stats.HoverPitch;
+		const float NewPitch = HoverState == EArcadeHoverState::Hovering
+			? Stats.HoverPitch
+			: FMath::FInterpTo(CurrentRotation.Pitch, TargetPitch, DeltaTime, Stats.HoverRotationResponse);
+		const float NewYaw = CurrentRotation.Yaw;
+		const float NewRoll = FMath::FInterpTo(CurrentRotation.Roll, 0.0f, DeltaTime,
+			Stats.HoverRotationResponse);
+		GetOwner()->SetActorRotation(FRotator(NewPitch, NewYaw, NewRoll));
+		if (HoverState == EArcadeHoverState::Leaving && FMath::Abs(NewPitch) <= 0.5f)
+		{
+			GetOwner()->SetActorRotation(FRotator(0.0f, NewYaw, 0.0f));
+			SetAuthoritativeHoverState(EArcadeHoverState::Flying);
+		}
+		return;
+	}
 	const float TurnRateMultiplier = CalculateTurnRateMultiplier(Stats);
 
 	const float NewYaw = CurrentRotation.Yaw
@@ -226,7 +313,9 @@ void UArcadeFlightComponent::RotateAircraft(const float DeltaTime, const FJetFli
 		CurrentRotation.Pitch + SmoothedSteering.Y * Stats.MaxPitchTurnRate * TurnRateMultiplier * DeltaTime,
 		-Stats.MaxPitch, Stats.MaxPitch);
 
-	const float VisualBank = -SmoothedSteering.X * Stats.MaxVisualBank;
+	// Positive mouse yaw banks this aircraft model clockwise around its forward X axis:
+	// right wing down for a right turn, left wing down for a left turn.
+	const float VisualBank = SmoothedSteering.X * Stats.MaxVisualBank;
 	const float StrafeBank = -SmoothedStrafe * Stats.MaxStrafeBank;
 	const float StrafePriority = FMath::Clamp(FMath::Abs(SmoothedStrafe), 0.0f, 1.0f);
 	const float TargetRoll = FMath::Lerp(VisualBank, StrafeBank, StrafePriority);
@@ -263,6 +352,28 @@ float UArcadeFlightComponent::GetCurrentTurnRateMultiplier() const
 
 void UArcadeFlightComponent::MoveAircraft(const float DeltaTime, const FJetFlightStats& Stats)
 {
+	if (HoverState == EArcadeHoverState::Entering)
+	{
+		CurrentForwardSpeed = FMath::FInterpTo(CurrentForwardSpeed, 0.0f, DeltaTime,
+			Stats.HoverDecelerationResponse);
+		if (CurrentForwardSpeed <= 5.0f)
+		{
+			CurrentForwardSpeed = 0.0f;
+			SetAuthoritativeHoverState(EArcadeHoverState::Hovering);
+		}
+	}
+	else if (HoverState == EArcadeHoverState::Hovering)
+	{
+		CurrentForwardSpeed = 0.0f;
+	}
+	else if (HoverState == EArcadeHoverState::Leaving)
+	{
+		const float ExitTargetSpeed = Stats.ForwardSpeed * (1.0f - HoverPresentationAlpha);
+		CurrentForwardSpeed = FMath::FInterpTo(CurrentForwardSpeed, ExitTargetSpeed, DeltaTime,
+			Stats.HoverExitAccelerationResponse);
+	}
+	else
+	{
 	const UJetBoostComponent* Boost = GetOwner()->FindComponentByClass<UJetBoostComponent>();
 	const float BoostAlpha = Boost ? Boost->GetBoostAlpha() : 0.0f;
 	const float MinimumSpeed = FMath::Min(Stats.MinForwardSpeed, Stats.ForwardSpeed);
@@ -295,8 +406,10 @@ void UArcadeFlightComponent::MoveAircraft(const float DeltaTime, const FJetFligh
 	const float TargetForwardSpeed = PlayerTargetSpeed * DirectionSpeedMultiplier;
 	CurrentForwardSpeed = FMath::FInterpTo(CurrentForwardSpeed, TargetForwardSpeed, DeltaTime,
 		Stats.ForwardSpeedResponse * DirectionResponseMultiplier);
+	}
+	const float EffectiveStrafe = HoverState == EArcadeHoverState::Flying ? SmoothedStrafe : 0.0f;
 	const FVector Velocity = GetOwner()->GetActorForwardVector() * CurrentForwardSpeed
-		+ GetOwner()->GetActorRightVector() * SmoothedStrafe * Stats.StrafeSpeed;
+		+ GetOwner()->GetActorRightVector() * EffectiveStrafe * Stats.StrafeSpeed;
 	CurrentVelocity = Velocity;
 
 	FHitResult Hit;

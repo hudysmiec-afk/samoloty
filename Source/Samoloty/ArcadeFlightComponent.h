@@ -7,6 +7,15 @@
 class UJetBoostComponent;
 class UJetStatsComponent;
 
+UENUM(BlueprintType)
+enum class EArcadeHoverState : uint8
+{
+	Flying,
+	Entering,
+	Hovering,
+	Leaving
+};
+
 USTRUCT()
 struct FArcadeFlightNetworkState
 {
@@ -69,9 +78,27 @@ public:
 	UFUNCTION(BlueprintPure, Category="Plane|Flight")
 	float GetSmoothedBrake() const { return SmoothedBrake; }
 
+	UFUNCTION(BlueprintCallable, Category="Plane|Flight|Hover")
+	void ToggleHover();
+
+	UFUNCTION(BlueprintCallable, Category="Plane|Flight|Hover")
+	void RequestExitHover();
+
+	UFUNCTION(BlueprintPure, Category="Plane|Flight|Hover")
+	EArcadeHoverState GetHoverState() const { return HoverState; }
+
+	UFUNCTION(BlueprintPure, Category="Plane|Flight|Hover")
+	float GetHoverAlpha() const { return HoverPresentationAlpha; }
+
 private:
 	UFUNCTION(Server, Unreliable)
 	void ServerSetFlightInput(FVector2D Steering, float Strafe, float Brake, uint16 InputSequence);
+
+	UFUNCTION(Server, Reliable)
+	void ServerToggleHover();
+
+	UFUNCTION(Server, Reliable)
+	void ServerRequestExitHover();
 
 	void SimulateFlight(float DeltaTime);
 	void RotateAircraft(float DeltaTime, const struct FJetFlightStats& Stats);
@@ -80,6 +107,8 @@ private:
 	void InterpolateBufferedState();
 	void UpdateLocalPresentationInput(float DeltaTime);
 	float CalculateTurnRateMultiplier(const struct FJetFlightStats& Stats) const;
+	void SetAuthoritativeHoverState(EArcadeHoverState NewState);
+	void UpdateHoverPresentation(float DeltaTime, const struct FJetFlightStats& Stats);
 
 	UFUNCTION()
 	void OnRep_ServerState();
@@ -98,6 +127,9 @@ private:
 	UPROPERTY(ReplicatedUsing=OnRep_ServerState)
 	FArcadeFlightNetworkState ServerState;
 
+	UPROPERTY(Replicated)
+	EArcadeHoverState HoverState = EArcadeHoverState::Flying;
+
 	FVector2D RawSteering = FVector2D::ZeroVector;
 	FVector2D SmoothedSteering = FVector2D::ZeroVector;
 	float RawStrafe = 0.0f;
@@ -105,6 +137,7 @@ private:
 	float RawBrake = 0.0f;
 	float SmoothedBrake = 0.0f;
 	float CurrentForwardSpeed = 0.0f;
+	float HoverPresentationAlpha = 0.0f;
 	FVector CurrentVelocity = FVector::ZeroVector;
 	float TimeSinceInputSent = 0.0f;
 	uint16 LocalInputSequence = 0;

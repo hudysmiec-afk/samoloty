@@ -55,6 +55,14 @@ BoostEngineLoop
 
 Każda Fala dźwiękowa powinna mieć włączone zapętlanie oraz przypisane tłumienie 3D. Zalecany format źródłowy to WAV 48 kHz mono, PCM 16- lub 24-bit.
 
+## Tryb zawisu
+
+Klawisz `B` rozpoczyna serwerowo autorytatywne przejście do pionowego zawisu. Samolot wytraca prędkość, obraca się do `HoverPitch`, a po osiągnięciu pełnego stanu `Hovering` nie przyjmuje sterowania lotem ani wejścia broni.
+
+W pełnym zawisie prawy przycisk myszy przełącza względny obrót kamery, a kółko myszy reguluje jej odległość. Opuszczenie zawisu ponownie rozpędza samolot. Boost ma priorytet i wymusza wyjście z zawisu.
+
+`CameraFramingSpeed` odpowiada za miękkie przesuwanie kadru, natomiast `CameraRotationFollowSpeed` niezależnie określa, jak szybko kamera łapie yaw i pitch samolotu. Rozdzielenie tych parametrów zachowuje arcade'owe kadrowanie bez utrudniającego celowanie opóźnienia obrotu.
+
 ## Debug boosta
 
 `JetBoost → Show Boost Debug` pokazuje:

@@ -100,6 +100,9 @@ protected:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Plane|Camera", meta=(ClampMin="0.1"))
 	float CameraFramingSpeed = 5.0f;
 
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Plane|Camera", meta=(ClampMin="0.1"))
+	float CameraRotationFollowSpeed = 16.0f;
+
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Plane|Camera", meta=(ClampMin="5", ClampMax="170"))
 	float NormalFieldOfView = 90.0f;
 
@@ -112,11 +115,38 @@ protected:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Plane|Camera", meta=(ClampMin="0"))
 	float BoostCameraDistance = 1350.0f;
 
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Plane|Camera|Hover", meta=(ClampMin="0"))
+	float HoverCameraDistance = 1400.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Plane|Camera|Hover")
+	float HoverCameraHeight = 320.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Plane|Camera|Hover", meta=(ClampMin="0", ClampMax="89"))
+	float MaxHoverCameraPitch = 60.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Plane|Camera|Hover", meta=(ClampMin="0"))
+	float MinHoverCameraDistance = 600.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Plane|Camera|Hover", meta=(ClampMin="0"))
+	float MaxHoverCameraDistance = 2600.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Plane|Camera|Hover", meta=(ClampMin="1"))
+	float HoverCameraZoomStep = 180.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Plane|Camera|Hover", meta=(ClampMin="0.01"))
+	float HoverCameraMouseSensitivity = 3.0f;
+
 private:
 	void SetStrafe(float Value);
 	void SetBrake(float Value);
 	void StartBoost();
 	void StopBoost();
+	void ToggleHover();
+	void SetHoverCameraZoom(float Value);
+	void AddHoverCameraYawInput(float Value);
+	void AddHoverCameraPitchInput(float Value);
+	void BeginHoverCameraOrbit();
+	void EndHoverCameraOrbit();
 	void StartRocketFire();
 	void StopRocketFire();
 	void StartRifleFire();
@@ -127,5 +157,12 @@ private:
 	FVector2D CursorSteering = FVector2D::ZeroVector;
 	float StrafeInput = 0.0f;
 	float BrakeInput = 0.0f;
+	bool bHoverCameraOrbitHeld = false;
+	float HoverCameraOrbitYaw = 0.0f;
+	float HoverCameraOrbitPitch = 0.0f;
+	float CurrentHoverCameraDistance = 1400.0f;
 	FVector CurrentCameraSocketOffset = FVector(0.0f, 0.0f, 180.0f);
+	FRotator CurrentCameraWorldRotation = FRotator::ZeroRotator;
+	FVector2D SavedCursorPosition = FVector2D::ZeroVector;
+	bool bHasSavedCursorPosition = false;
 };

@@ -64,6 +64,7 @@ AArcadeJetPawn::AArcadeJetPawn()
 	CameraBoom->bInheritPitch = true;
 	CameraBoom->bInheritYaw = true;
 	CameraBoom->bInheritRoll = false;
+	CameraBoom->SetUsingAbsoluteRotation(true);
 	CameraBoom->bEnableCameraLag = true;
 	CameraBoom->bEnableCameraRotationLag = false;
 	CameraBoom->CameraLagSpeed = CameraLagSpeed;
@@ -80,6 +81,9 @@ void AArcadeJetPawn::BeginPlay()
 	JetStats->RecalculateStats();
 	RocketWeapon->SetSpawnPoints(RocketSpawnLeft, RocketSpawnRight);
 	RifleGun->SetMuzzlePoints(GunMuzzleLeft, GunMuzzleRight);
+	CurrentHoverCameraDistance = FMath::Clamp(
+		HoverCameraDistance, MinHoverCameraDistance, MaxHoverCameraDistance);
+	CurrentCameraWorldRotation = GetActorRotation();
 
 	if (APlayerController* PlayerController = Cast<APlayerController>(GetController()))
 	{
@@ -102,8 +106,12 @@ void AArcadeJetPawn::SetupPlayerInputComponent(UInputComponent* PlayerInputCompo
 	check(PlayerInputComponent);
 	PlayerInputComponent->BindAxis(TEXT("PlaneStrafe"), this, &AArcadeJetPawn::SetStrafe);
 	PlayerInputComponent->BindAxis(TEXT("PlaneBrake"), this, &AArcadeJetPawn::SetBrake);
+	PlayerInputComponent->BindAxis(TEXT("PlaneHoverZoom"), this, &AArcadeJetPawn::SetHoverCameraZoom);
+	PlayerInputComponent->BindAxis(TEXT("PlaneMouseX"), this, &AArcadeJetPawn::AddHoverCameraYawInput);
+	PlayerInputComponent->BindAxis(TEXT("PlaneMouseY"), this, &AArcadeJetPawn::AddHoverCameraPitchInput);
 	PlayerInputComponent->BindAction(TEXT("PlaneBoost"), IE_Pressed, this, &AArcadeJetPawn::StartBoost);
 	PlayerInputComponent->BindAction(TEXT("PlaneBoost"), IE_Released, this, &AArcadeJetPawn::StopBoost);
+	PlayerInputComponent->BindAction(TEXT("PlaneHover"), IE_Pressed, this, &AArcadeJetPawn::ToggleHover);
 	PlayerInputComponent->BindAction(TEXT("PlaneRocketFire"), IE_Pressed, this, &AArcadeJetPawn::StartRocketFire);
 	PlayerInputComponent->BindAction(TEXT("PlaneRocketFire"), IE_Released, this, &AArcadeJetPawn::StopRocketFire);
 	PlayerInputComponent->BindAction(TEXT("PlaneRifleFire"), IE_Pressed, this, &AArcadeJetPawn::StartRifleFire);
@@ -115,6 +123,10 @@ void AArcadeJetPawn::Tick(const float DeltaSeconds)
 	Super::Tick(DeltaSeconds);
 	if (IsLocallyControlled())
 	{
+		if (bHoverCameraOrbitHeld && FlightMovement->GetHoverState() != EArcadeHoverState::Hovering)
+		{
+			EndHoverCameraOrbit();
+		}
 		UpdateCursorInput();
 		FlightMovement->SetLocalFlightInput(CursorSteering, StrafeInput, BrakeInput);
 		UpdateLocalCamera(DeltaSeconds);
@@ -133,6 +145,8 @@ void AArcadeJetPawn::SetBrake(const float Value)
 
 void AArcadeJetPawn::StartBoost()
 {
+	EndHoverCameraOrbit();
+	FlightMovement->RequestExitHover();
 	JetBoost->SetBoostRequested(true);
 }
 
@@ -141,13 +155,99 @@ void AArcadeJetPawn::StopBoost()
 	JetBoost->SetBoostRequested(false);
 }
 
+void AArcadeJetPawn::ToggleHover()
+{
+	EndHoverCameraOrbit();
+	HoverCameraOrbitYaw = 0.0f;
+	HoverCameraOrbitPitch = 0.0f;
+	FlightMovement->ToggleHover();
+}
+
+void AArcadeJetPawn::AddHoverCameraYawInput(const float Value)
+{
+	if (bHoverCameraOrbitHeld)
+	{
+		HoverCameraOrbitYaw = FMath::UnwindDegrees(
+			HoverCameraOrbitYaw + Value * HoverCameraMouseSensitivity);
+	}
+}
+
+void AArcadeJetPawn::AddHoverCameraPitchInput(const float Value)
+{
+	if (bHoverCameraOrbitHeld)
+	{
+		HoverCameraOrbitPitch = FMath::Clamp(
+			HoverCameraOrbitPitch + Value * HoverCameraMouseSensitivity,
+			-MaxHoverCameraPitch, MaxHoverCameraPitch);
+	}
+}
+
+void AArcadeJetPawn::BeginHoverCameraOrbit()
+{
+	if (bHoverCameraOrbitHeld)
+	{
+		return;
+	}
+	bHoverCameraOrbitHeld = true;
+	if (APlayerController* PlayerController = Cast<APlayerController>(GetController()))
+	{
+		float MouseX = 0.0f;
+		float MouseY = 0.0f;
+		bHasSavedCursorPosition = PlayerController->GetMousePosition(MouseX, MouseY);
+		SavedCursorPosition = FVector2D(MouseX, MouseY);
+		PlayerController->bShowMouseCursor = false;
+		PlayerController->SetInputMode(FInputModeGameOnly());
+	}
+}
+
+void AArcadeJetPawn::EndHoverCameraOrbit()
+{
+	if (!bHoverCameraOrbitHeld)
+	{
+		return;
+	}
+	bHoverCameraOrbitHeld = false;
+	if (APlayerController* PlayerController = Cast<APlayerController>(GetController()))
+	{
+		PlayerController->bShowMouseCursor = true;
+		FInputModeGameAndUI InputMode;
+		InputMode.SetHideCursorDuringCapture(false);
+		InputMode.SetLockMouseToViewportBehavior(EMouseLockMode::LockAlways);
+		PlayerController->SetInputMode(InputMode);
+		if (bHasSavedCursorPosition)
+		{
+			PlayerController->SetMouseLocation(
+				FMath::RoundToInt(SavedCursorPosition.X), FMath::RoundToInt(SavedCursorPosition.Y));
+		}
+	}
+	bHasSavedCursorPosition = false;
+}
+
+void AArcadeJetPawn::SetHoverCameraZoom(const float Value)
+{
+	if (FMath::Abs(Value) <= KINDA_SMALL_NUMBER
+		|| FlightMovement->GetHoverState() == EArcadeHoverState::Flying)
+	{
+		return;
+	}
+	CurrentHoverCameraDistance = FMath::Clamp(
+		CurrentHoverCameraDistance - Value * HoverCameraZoomStep,
+		MinHoverCameraDistance, MaxHoverCameraDistance);
+}
+
 void AArcadeJetPawn::StartRocketFire()
 {
+	if (FlightMovement->GetHoverState() == EArcadeHoverState::Hovering)
+	{
+		BeginHoverCameraOrbit();
+		return;
+	}
 	RocketWeapon->SetFireHeld(true);
 }
 
 void AArcadeJetPawn::StopRocketFire()
 {
+	EndHoverCameraOrbit();
 	RocketWeapon->SetFireHeld(false);
 }
 
@@ -199,14 +299,24 @@ void AArcadeJetPawn::UpdateLocalCamera(const float DeltaSeconds)
 	const FVector2D Steering = FlightMovement->GetSmoothedSteering();
 	const float Strafe = FlightMovement->GetSmoothedStrafe();
 	const float BoostAlpha = JetBoost->GetBoostAlpha();
+	const float HoverAlpha = FlightMovement->GetHoverAlpha();
 	const FVector DesiredOffset(
 		0.0f,
-		Steering.X * MaxCameraSideShift - Strafe * StrafeCameraSideShift,
-		180.0f + Steering.Y * MaxCameraVerticalShift);
+		(Steering.X * MaxCameraSideShift - Strafe * StrafeCameraSideShift) * (1.0f - HoverAlpha),
+		FMath::Lerp(180.0f + Steering.Y * MaxCameraVerticalShift, HoverCameraHeight, HoverAlpha));
 	CurrentCameraSocketOffset = FMath::VInterpTo(
 		CurrentCameraSocketOffset, DesiredOffset, DeltaSeconds, CameraFramingSpeed);
 	CameraBoom->SocketOffset = CurrentCameraSocketOffset;
-	CameraBoom->TargetArmLength = FMath::Lerp(NormalCameraDistance, BoostCameraDistance, BoostAlpha);
+	const float FlightCameraDistance = FMath::Lerp(NormalCameraDistance, BoostCameraDistance, BoostAlpha);
+	CameraBoom->TargetArmLength = FMath::Lerp(FlightCameraDistance, CurrentHoverCameraDistance, HoverAlpha);
+	const FRotator ActorViewRotation(GetActorRotation().Pitch, GetActorRotation().Yaw, 0.0f);
+	const FRotator HoverViewRotation(HoverCameraOrbitPitch,
+		GetActorRotation().Yaw + HoverCameraOrbitYaw, 0.0f);
+	const FQuat DesiredCameraRotation = FQuat::Slerp(
+		ActorViewRotation.Quaternion(), HoverViewRotation.Quaternion(), HoverAlpha).GetNormalized();
+	CurrentCameraWorldRotation = FMath::RInterpTo(CurrentCameraWorldRotation,
+		DesiredCameraRotation.Rotator(), DeltaSeconds, CameraRotationFollowSpeed);
+	CameraBoom->SetWorldRotation(CurrentCameraWorldRotation);
 	FollowCamera->SetFieldOfView(FMath::Lerp(NormalFieldOfView, BoostFieldOfView, BoostAlpha));
 	CameraBoom->CameraLagSpeed = CameraLagSpeed;
 }

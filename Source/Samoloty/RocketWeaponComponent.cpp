@@ -1,5 +1,6 @@
 #include "RocketWeaponComponent.h"
 
+#include "ArcadeFlightComponent.h"
 #include "HealthComponent.h"
 #include "JetStatsComponent.h"
 #include "RocketProjectile.h"
@@ -66,6 +67,19 @@ void URocketWeaponComponent::TickComponent(const float DeltaTime, const ELevelTi
 	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
 	if (GetOwner()->HasAuthority())
 	{
+		const UArcadeFlightComponent* Flight = GetOwner()->FindComponentByClass<UArcadeFlightComponent>();
+		if (Flight && Flight->GetHoverState() == EArcadeHoverState::Hovering)
+		{
+			if (WeaponState == ERocketWeaponState::FiringSalvos)
+			{
+				WeaponState = ERocketWeaponState::Ready;
+				SalvosFired = 0;
+				NextActionServerTime = 0.0;
+			}
+			UpdateDebugCounts(DeltaTime);
+			DrawWeaponDebug();
+			return;
+		}
 		const double ServerNow = GetWorld()->GetTimeSeconds();
 		if (WeaponState == ERocketWeaponState::FiringSalvos && ServerNow >= NextActionServerTime)
 		{
@@ -80,6 +94,10 @@ void URocketWeaponComponent::TickComponent(const float DeltaTime, const ELevelTi
 				StartBarrage();
 			}
 		}
+		else if (WeaponState == ERocketWeaponState::Ready && bServerFireHeld)
+		{
+			StartBarrage();
+		}
 		UpdateDebugCounts(DeltaTime);
 	}
 	DrawWeaponDebug();
@@ -88,6 +106,11 @@ void URocketWeaponComponent::TickComponent(const float DeltaTime, const ELevelTi
 void URocketWeaponComponent::StartBarrage()
 {
 	if (!GetOwner()->HasAuthority() || WeaponState != ERocketWeaponState::Ready)
+	{
+		return;
+	}
+	const UArcadeFlightComponent* Flight = GetOwner()->FindComponentByClass<UArcadeFlightComponent>();
+	if (Flight && Flight->GetHoverState() == EArcadeHoverState::Hovering)
 	{
 		return;
 	}

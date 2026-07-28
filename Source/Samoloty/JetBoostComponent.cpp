@@ -84,8 +84,12 @@ void UJetBoostComponent::DrawBoostDebug(const float MaxEnergy) const
 		? StatsComponent->GetFlightStats().MaxPitchTurnRate * TurnMultiplier : 0.0f;
 	const FRotator AircraftRotation = GetOwner()->GetActorRotation();
 	const float MaxPitchAngle = StatsComponent ? StatsComponent->GetFlightStats().MaxPitch : 0.0f;
+	const EArcadeHoverState HoverState = Flight ? Flight->GetHoverState() : EArcadeHoverState::Flying;
+	const TCHAR* HoverStateText = HoverState == EArcadeHoverState::Flying ? TEXT("FLYING")
+		: HoverState == EArcadeHoverState::Entering ? TEXT("ENTERING")
+		: HoverState == EArcadeHoverState::Hovering ? TEXT("HOVERING") : TEXT("LEAVING");
 	const FString Message = FString::Printf(
-		TEXT("BOOST [%s]\nEnergy: %.1f / %.1f\nSpeed: %.1f m/s\nRotation: Yaw %.1f deg | Pitch %.1f deg (limit +/-%.1f)\nMax turn rate: Yaw %.1f deg/s | Pitch %.1f deg/s (x%.2f)\nRequested: %s | Server state: %s | Alpha: %.2f"),
+		TEXT("BOOST [%s]\nEnergy: %.1f / %.1f\nSpeed: %.1f m/s\nRotation: Yaw %.1f deg | Pitch %.1f deg (limit +/-%.1f)\nMax turn rate: Yaw %.1f deg/s | Pitch %.1f deg/s (x%.2f)\nHover: %s | Alpha: %.2f\nRequested: %s | Server state: %s | Alpha: %.2f"),
 		*AuthorityText,
 		CurrentEnergy,
 		MaxEnergy,
@@ -96,6 +100,8 @@ void UJetBoostComponent::DrawBoostDebug(const float MaxEnergy) const
 		MaxYawRate,
 		MaxPitchRate,
 		TurnMultiplier,
+		HoverStateText,
+		Flight ? Flight->GetHoverAlpha() : 0.0f,
 		bLocalBoostRequested ? TEXT("YES") : TEXT("NO"),
 		bIsBoosting ? TEXT("ON") : TEXT("OFF"),
 		BoostAlpha);
