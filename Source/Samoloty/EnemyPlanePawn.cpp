@@ -40,7 +40,7 @@ AEnemyPlanePawn::AEnemyPlanePawn()
 	FRifleGunStats RifleStats;
 	RifleStats.Damage = 20.0f;
 	RifleStats.ShotsPerSecond = 10.0f;
-	RifleStats.SpreadAngleDegrees = 1.0f;
+	RifleStats.SpreadAngleDegrees = 4.0f;
 	JetStats->SetBaseRifleGunStats(RifleStats);
 
 	Health = CreateDefaultSubobject<UHealthComponent>(TEXT("Health"));

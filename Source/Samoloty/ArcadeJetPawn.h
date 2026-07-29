@@ -6,7 +6,7 @@
 
 class UArcadeFlightComponent;
 class UCameraComponent;
-class UCapsuleComponent;
+class UBoxComponent;
 class UHealthComponent;
 class UJetBoostComponent;
 class UJetEngineAudioComponent;
@@ -32,7 +32,7 @@ protected:
 	virtual void BeginPlay() override;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Plane|Components")
-	TObjectPtr<UCapsuleComponent> Collision;
+	TObjectPtr<UBoxComponent> Collision;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Plane|Components")
 	TObjectPtr<UStaticMeshComponent> PlaneMesh;

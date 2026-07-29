@@ -32,7 +32,13 @@
 - Niezawodna zmiana stanu przycisku uruchamia/zatrzymuje ogień na serwerze.
 - Niezawodność nie jest używana dla kosmetyki każdego strzału; `Unreliable Multicast` przekazuje tor pozostałym klientom.
 - Tracer jest lokalnym aktorem prezentacji i nigdy nie steruje trafieniem ani damage.
-- Obecna kapsuła Pawna musi blokować `Visibility`.
+- Główny `BoxComponent` Pawna musi blokować `Visibility`.
+
+## Celowanie kamerą
+
+RifleGun gracza wykonuje dokładny hitscan ze środka kamery, bez auto-aimu i bez wyszukiwania celu obok celownika. Serwer otrzymuje skwantyzowane położenie oraz kierunek kamery, ogranicza dopuszczalne odsunięcie początku trace od Pawna i sam rozstrzyga trafienie.
+
+Tracer pozostaje prezentacją: rozpoczyna się w naprzemiennej lufie i kończy w punkcie trafienia kamery. Trafienie znajdujące się bliżej niż `MinimumCameraHitForwardDistance` przed samolotem jest odrzucane, aby działka nie strzelały do tyłu w cel znajdujący się pomiędzy samolotem a kamerą.
 
 ## Konfiguracja w `BP_PlayerPlane`
 

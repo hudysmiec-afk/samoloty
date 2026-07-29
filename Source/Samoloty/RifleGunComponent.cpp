@@ -31,6 +31,49 @@ void URifleGunComponent::SetMuzzlePoints(USceneComponent* InLeftMuzzle, USceneCo
 	RightMuzzle = InRightMuzzle;
 }
 
+void URifleGunComponent::SetCameraAimEnabled(const bool bEnabled)
+{
+	bLocalCameraAimEnabled = bEnabled;
+	if (GetOwner()->HasAuthority())
+	{
+		bServerCameraAimEnabled = bEnabled;
+	}
+}
+
+void URifleGunComponent::SetCameraAim(const FVector& CameraOrigin, const FVector& CameraDirection)
+{
+	if (!bLocalCameraAimEnabled)
+	{
+		return;
+	}
+	LocalCameraOrigin = CameraOrigin;
+	LocalCameraDirection = CameraDirection.GetSafeNormal();
+	if (GetOwner()->HasAuthority())
+	{
+		ServerCameraOrigin = LocalCameraOrigin;
+		ServerCameraDirection = LocalCameraDirection;
+		bServerCameraAimEnabled = true;
+		return;
+	}
+	const double Now = GetWorld()->GetTimeSeconds();
+	if (Now >= NextAimUpdateTime)
+	{
+		NextAimUpdateTime = Now + 1.0 / FMath::Max(1.0f, AimUpdatesPerSecond);
+		ServerSetCameraAim(LocalCameraOrigin, LocalCameraDirection);
+	}
+}
+
+void URifleGunComponent::ServerSetCameraAim_Implementation(
+	const FVector_NetQuantize100 CameraOrigin,
+	const FVector_NetQuantizeNormal CameraDirection)
+{
+	const FVector OwnerLocation = GetOwner()->GetActorLocation();
+	ServerCameraOrigin = OwnerLocation + (FVector(CameraOrigin) - OwnerLocation)
+		.GetClampedToMaxSize(MaxCameraOriginDistance);
+	ServerCameraDirection = FVector(CameraDirection).GetSafeNormal();
+	bServerCameraAimEnabled = true;
+}
+
 void URifleGunComponent::SetFireHeld(const bool bHeld)
 {
 	bLocalFireHeld = bHeld;
@@ -125,16 +168,48 @@ bool URifleGunComponent::BuildShot(const uint8 MuzzleIndex, const bool bApplyDam
 	}
 	const FRifleGunStats& Stats = StatsComponent->GetRifleGunStats();
 	OutStart = Muzzle->GetComponentLocation();
-	OutDirection = FMath::VRandCone(Muzzle->GetForwardVector(),
-		FMath::DegreesToRadians(Stats.SpreadAngleDegrees));
-	OutEnd = OutStart + OutDirection * Stats.MaxRange;
-
-	FCollisionQueryParams QueryParams(SCENE_QUERY_STAT(RifleGunTrace), true, GetOwner());
+	const bool bUseCameraAim = bApplyDamage ? bServerCameraAimEnabled : bLocalCameraAimEnabled;
 	FHitResult Hit;
-	bOutHit = GetWorld()->LineTraceSingleByChannel(Hit, OutStart, OutEnd, ECC_Visibility, QueryParams);
+	if (bUseCameraAim)
+	{
+		const FVector CameraOrigin = bApplyDamage ? ServerCameraOrigin : LocalCameraOrigin;
+		const FVector RequestedDirection = bApplyDamage ? ServerCameraDirection : LocalCameraDirection;
+		const FVector CameraDirection = RequestedDirection.GetSafeNormal();
+		FVector AimPoint = FindCameraAimPoint(
+			CameraOrigin, CameraDirection, Stats.MaxRange, Hit);
+		const float HitForwardDistance = FVector::DotProduct(
+			AimPoint - GetOwner()->GetActorLocation(), GetOwner()->GetActorForwardVector());
+		if (Hit.bBlockingHit && HitForwardDistance < MinimumCameraHitForwardDistance)
+		{
+			// A target between the chase camera and the aircraft is behind the fixed guns.
+			// Keep firing along the camera direction instead of bending tracers backwards.
+			Hit = FHitResult();
+			AimPoint = CameraOrigin + CameraDirection * Stats.MaxRange;
+		}
+		OutDirection = (AimPoint - OutStart).GetSafeNormal();
+		OutEnd = AimPoint;
+		bOutHit = Hit.bBlockingHit;
+		if (bDrawShotDebug)
+		{
+			DrawDebugLine(GetWorld(), CameraOrigin, CameraOrigin + RequestedDirection * 20000.0f,
+				FColor::Blue, false, 0.1f, 0, 1.0f);
+		}
+	}
+	else
+	{
+		OutDirection = FMath::VRandCone(Muzzle->GetForwardVector(),
+			FMath::DegreesToRadians(Stats.SpreadAngleDegrees));
+		OutEnd = OutStart + OutDirection * Stats.MaxRange;
+		FCollisionQueryParams QueryParams(SCENE_QUERY_STAT(RifleGunTrace), true, GetOwner());
+		bOutHit = GetWorld()->LineTraceSingleByChannel(
+			Hit, OutStart, OutEnd, ECC_Visibility, QueryParams);
+		if (bOutHit)
+		{
+			OutEnd = Hit.ImpactPoint;
+		}
+	}
 	if (bOutHit)
 	{
-		OutEnd = Hit.ImpactPoint;
 		if (bApplyDamage && Hit.GetActor())
 		{
 			const APawn* OwnerPawn = Cast<APawn>(GetOwner());
@@ -149,6 +224,19 @@ bool URifleGunComponent::BuildShot(const uint8 MuzzleIndex, const bool bApplyDam
 		}
 	}
 	return true;
+}
+
+FVector URifleGunComponent::FindCameraAimPoint(const FVector& CameraOrigin,
+	const FVector& CameraDirection, const float MaxRange, FHitResult& OutHit) const
+{
+	FCollisionQueryParams CameraParams(SCENE_QUERY_STAT(RifleCameraTrace), true, GetOwner());
+	const FVector CameraEnd = CameraOrigin + CameraDirection * MaxRange;
+	if (GetWorld()->LineTraceSingleByChannel(OutHit, CameraOrigin, CameraEnd,
+		ECC_Visibility, CameraParams))
+	{
+		return OutHit.ImpactPoint;
+	}
+	return CameraEnd;
 }
 
 void URifleGunComponent::MulticastPlayShot_Implementation(const FVector_NetQuantize Start,

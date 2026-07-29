@@ -8,7 +8,7 @@
 #include "RocketWeaponComponent.h"
 #include "RifleGunComponent.h"
 #include "Camera/CameraComponent.h"
-#include "Components/CapsuleComponent.h"
+#include "Components/BoxComponent.h"
 #include "Components/InputComponent.h"
 #include "Components/SceneComponent.h"
 #include "Components/StaticMeshComponent.h"
@@ -25,9 +25,10 @@ AArcadeJetPawn::AArcadeJetPawn()
 	SetMinNetUpdateFrequency(15.0f);
 	SetNetCullDistanceSquared(FMath::Square(500000.0f)); // 5 km in Unreal units.
 
-	Collision = CreateDefaultSubobject<UCapsuleComponent>(TEXT("Collision"));
-	Collision->InitCapsuleSize(110.0f, 240.0f);
+	Collision = CreateDefaultSubobject<UBoxComponent>(TEXT("Collision"));
+	Collision->InitBoxExtent(FVector(240.0f, 110.0f, 60.0f));
 	Collision->SetCollisionProfileName(UCollisionProfile::Pawn_ProfileName);
+	Collision->SetCollisionResponseToChannel(ECC_Visibility, ECR_Block);
 	RootComponent = Collision;
 
 	PlaneMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("PlaneMesh"));
@@ -81,6 +82,7 @@ void AArcadeJetPawn::BeginPlay()
 	JetStats->RecalculateStats();
 	RocketWeapon->SetSpawnPoints(RocketSpawnLeft, RocketSpawnRight);
 	RifleGun->SetMuzzlePoints(GunMuzzleLeft, GunMuzzleRight);
+	RifleGun->SetCameraAimEnabled(true);
 	CurrentHoverCameraDistance = FMath::Clamp(
 		HoverCameraDistance, MinHoverCameraDistance, MaxHoverCameraDistance);
 	CurrentCameraWorldRotation = GetActorRotation();
@@ -130,6 +132,7 @@ void AArcadeJetPawn::Tick(const float DeltaSeconds)
 		UpdateCursorInput();
 		FlightMovement->SetLocalFlightInput(CursorSteering, StrafeInput, BrakeInput);
 		UpdateLocalCamera(DeltaSeconds);
+		RifleGun->SetCameraAim(FollowCamera->GetComponentLocation(), FollowCamera->GetForwardVector());
 	}
 }
 
