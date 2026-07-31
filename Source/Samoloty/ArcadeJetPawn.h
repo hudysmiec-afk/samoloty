@@ -28,8 +28,22 @@ public:
 	virtual void Tick(float DeltaSeconds) override;
 	virtual void SetupPlayerInputComponent(UInputComponent* PlayerInputComponent) override;
 
+	/** Applies render-only roll to the complete visible aircraft assembly. */
+	void SetVisualBank(float BankDegrees);
+
+	/** Moves the logical plane while sweeping its box hitbox and returns the applied delta. */
+	FVector MovePlaneWithCollision(const FVector& RequestedMove);
+
 protected:
 	virtual void BeginPlay() override;
+
+	/** Invisible transform representing the actual flight path and camera direction. */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Plane|Components")
+	TObjectPtr<USceneComponent> VirtualFlightRoot;
+
+	/** Visible aircraft assembly. Mesh, damage hitbox and weapon origins move together. */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Plane|Components")
+	TObjectPtr<USceneComponent> VisualRoot;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Plane|Components")
 	TObjectPtr<UBoxComponent> Collision;
@@ -76,44 +90,14 @@ protected:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Plane|Components")
 	TObjectPtr<UCameraComponent> FollowCamera;
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Plane|Input", meta=(ClampMin="0", ClampMax="0.5"))
-	float CursorDeadZone = 0.06f;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Plane|Input", meta=(ClampMin="0.1", ClampMax="4"))
-	float CursorResponseExponent = 1.35f;
-
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Plane|Input")
 	bool bInvertMouseY = true;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Plane|Camera", meta=(ClampMin="0"))
-	float CameraLagSpeed = 6.0f;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Plane|Camera", meta=(ClampMin="0.1"))
-	float MaxCameraSideShift = 160.0f;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Plane|Camera", meta=(ClampMin="0"))
-	float StrafeCameraSideShift = 280.0f;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Plane|Camera", meta=(ClampMin="0.1"))
-	float MaxCameraVerticalShift = 70.0f;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Plane|Camera", meta=(ClampMin="0.1"))
-	float CameraFramingSpeed = 5.0f;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Plane|Camera", meta=(ClampMin="0.1"))
-	float CameraRotationFollowSpeed = 16.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Plane|Camera", meta=(ClampMin="5", ClampMax="170"))
 	float NormalFieldOfView = 90.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Plane|Camera", meta=(ClampMin="5", ClampMax="170"))
 	float BoostFieldOfView = 105.0f;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Plane|Camera", meta=(ClampMin="0"))
-	float NormalCameraDistance = 1150.0f;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Plane|Camera", meta=(ClampMin="0"))
-	float BoostCameraDistance = 1350.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Plane|Camera|Hover", meta=(ClampMin="0"))
 	float HoverCameraDistance = 1400.0f;
@@ -161,8 +145,9 @@ private:
 	float HoverCameraOrbitYaw = 0.0f;
 	float HoverCameraOrbitPitch = 0.0f;
 	float CurrentHoverCameraDistance = 1400.0f;
-	FVector CurrentCameraSocketOffset = FVector(0.0f, 0.0f, 180.0f);
+	FVector CurrentCameraWorldPosition = FVector::ZeroVector;
 	FRotator CurrentCameraWorldRotation = FRotator::ZeroRotator;
 	FVector2D SavedCursorPosition = FVector2D::ZeroVector;
 	bool bHasSavedCursorPosition = false;
+	bool bFlightCameraInitialized = false;
 };

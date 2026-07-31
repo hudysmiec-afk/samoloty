@@ -30,3 +30,6 @@ Thumbs.db
 *.pdb
 *.obj
 *.pch
+
+# Local reference sources used only for gameplay analysis
+Content/*_ep*_main/

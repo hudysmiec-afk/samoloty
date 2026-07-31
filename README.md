@@ -1,6 +1,6 @@
 # Samoloty
 
-Prototyp sieciowej gry lotniczej arcade tworzony w Unreal Engine 5.8. Projekt rozwija sterowanie inspirowane grami pokroju Ace Online: samolot jest prowadzony kursorem, może wykonywać boczny strafe, zwalniać, korzystać z dopalacza oraz walczyć za pomocą rakiet i karabinu pokładowego.
+Prototyp sieciowej gry lotniczej arcade tworzony w Unreal Engine 5.8. Samolot jest prowadzony kursorem, może wykonywać boczny strafe, zwalniać, korzystać z dopalacza oraz walczyć za pomocą rakiet i karabinu pokładowego.
 
 ## Wymagania
 

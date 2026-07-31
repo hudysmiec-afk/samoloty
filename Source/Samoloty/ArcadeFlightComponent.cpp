@@ -1,11 +1,22 @@
 #include "ArcadeFlightComponent.h"
 
+#include "ArcadeJetPawn.h"
 #include "JetBoostComponent.h"
 #include "JetStatsComponent.h"
 #include "GameFramework/Actor.h"
 #include "GameFramework/GameStateBase.h"
 #include "GameFramework/Pawn.h"
 #include "Net/UnrealNetwork.h"
+
+namespace ArcadeFlightTuning
+{
+	// Flight-feel tuning is intentionally code-only while the prototype is being established.
+	constexpr float SteeringResponseSpeed = 4.0f;
+	constexpr float StrafeEngageSpeed = 10.0f;
+	constexpr float StrafeReleaseSpeed = 1.0f;
+	constexpr float MaxVisualBankDegrees = 72.0f;
+	constexpr float VisualBankResponseSpeed = 1.0f;
+}
 
 UArcadeFlightComponent::UArcadeFlightComponent()
 {
@@ -35,6 +46,10 @@ void UArcadeFlightComponent::BeginPlay()
 		if (const UJetStatsComponent* StatsComponent = Owner->FindComponentByClass<UJetStatsComponent>())
 		{
 			CurrentForwardSpeed = StatsComponent->GetFlightStats().ForwardSpeed;
+		}
+		if (AArcadeJetPawn* Plane = Cast<AArcadeJetPawn>(Owner))
+		{
+			Plane->SetVisualBank(0.0f);
 		}
 	}
 }
@@ -156,11 +171,27 @@ void UArcadeFlightComponent::UpdateLocalPresentationInput(const float DeltaTime)
 		return;
 	}
 
-	const FJetFlightStats& Stats = StatsComponent->GetFlightStats();
-	SmoothedSteering.X = FMath::FInterpTo(SmoothedSteering.X, RawSteering.X, DeltaTime, Stats.InputSmoothingSpeed);
-	SmoothedSteering.Y = FMath::FInterpTo(SmoothedSteering.Y, RawSteering.Y, DeltaTime, Stats.InputSmoothingSpeed);
-	SmoothedStrafe = FMath::FInterpTo(SmoothedStrafe, RawStrafe, DeltaTime, Stats.StrafeResponseSpeed);
-	SmoothedBrake = FMath::FInterpTo(SmoothedBrake, RawBrake, DeltaTime, Stats.InputSmoothingSpeed);
+	UpdateSmoothedInput(DeltaTime, StatsComponent->GetFlightStats());
+}
+
+void UArcadeFlightComponent::UpdateSmoothedInput(
+	const float DeltaTime, const FJetFlightStats& Stats)
+{
+	SmoothedSteering.X = FMath::FInterpConstantTo(
+		SmoothedSteering.X, RawSteering.X, DeltaTime, ArcadeFlightTuning::SteeringResponseSpeed);
+	SmoothedSteering.Y = FMath::FInterpConstantTo(
+		SmoothedSteering.Y, RawSteering.Y, DeltaTime, ArcadeFlightTuning::SteeringResponseSpeed);
+
+	// Arcade lateral control: A/D engages quickly, releases slowly and a reversal
+	// always travels linearly through zero instead of snapping between bank directions.
+	const bool bStrafePressed = FMath::Abs(RawStrafe) > KINDA_SMALL_NUMBER;
+	SmoothedStrafe = FMath::FInterpConstantTo(
+		SmoothedStrafe,
+		bStrafePressed ? RawStrafe : 0.0f,
+		DeltaTime,
+		bStrafePressed ? ArcadeFlightTuning::StrafeEngageSpeed : ArcadeFlightTuning::StrafeReleaseSpeed);
+	SmoothedBrake = FMath::FInterpTo(
+		SmoothedBrake, RawBrake, DeltaTime, Stats.InputSmoothingSpeed);
 }
 
 void UArcadeFlightComponent::ServerSetFlightInput_Implementation(
@@ -181,11 +212,9 @@ void UArcadeFlightComponent::SimulateFlight(const float DeltaTime)
 	}
 
 	const FJetFlightStats& Stats = StatsComponent->GetFlightStats();
-	SmoothedSteering.X = FMath::FInterpTo(SmoothedSteering.X, RawSteering.X, DeltaTime, Stats.InputSmoothingSpeed);
-	SmoothedSteering.Y = FMath::FInterpTo(SmoothedSteering.Y, RawSteering.Y, DeltaTime, Stats.InputSmoothingSpeed);
-	SmoothedStrafe = FMath::FInterpTo(SmoothedStrafe, RawStrafe, DeltaTime, Stats.StrafeResponseSpeed);
-	SmoothedBrake = FMath::FInterpTo(SmoothedBrake, RawBrake, DeltaTime, Stats.InputSmoothingSpeed);
+	UpdateSmoothedInput(DeltaTime, Stats);
 	RotateAircraft(DeltaTime, Stats);
+	UpdateVisualBank(DeltaTime);
 	MoveAircraft(DeltaTime, Stats);
 }
 
@@ -194,6 +223,7 @@ void UArcadeFlightComponent::UpdateReplicatedState()
 	ServerState.Location = GetOwner()->GetActorLocation();
 	ServerState.Rotation = GetOwner()->GetActorRotation();
 	ServerState.Velocity = CurrentVelocity;
+	ServerState.VisualBankDegrees = CurrentVisualBankDegrees;
 	ServerState.ServerTimeSeconds = GetWorld()->GetTimeSeconds();
 	ServerState.bTeleport = false;
 	++ServerState.Sequence;
@@ -205,6 +235,7 @@ void UArcadeFlightComponent::OnRep_ServerState()
 	Snapshot.Location = ServerState.Location;
 	Snapshot.Rotation = ServerState.Rotation.Quaternion();
 	Snapshot.Velocity = ServerState.Velocity;
+	Snapshot.VisualBankDegrees = ServerState.VisualBankDegrees;
 	Snapshot.ServerTimeSeconds = ServerState.ServerTimeSeconds;
 	Snapshot.Sequence = ServerState.Sequence;
 
@@ -214,6 +245,10 @@ void UArcadeFlightComponent::OnRep_ServerState()
 		SnapshotBuffer.Add(Snapshot);
 		GetOwner()->SetActorLocationAndRotation(Snapshot.Location, Snapshot.Rotation, false, nullptr,
 			ETeleportType::TeleportPhysics);
+		if (AArcadeJetPawn* Plane = Cast<AArcadeJetPawn>(GetOwner()))
+		{
+			Plane->SetVisualBank(Snapshot.VisualBankDegrees);
+		}
 		return;
 	}
 
@@ -231,6 +266,10 @@ void UArcadeFlightComponent::OnRep_ServerState()
 	{
 		GetOwner()->SetActorLocationAndRotation(Snapshot.Location, Snapshot.Rotation, false, nullptr,
 			ETeleportType::TeleportPhysics);
+		if (AArcadeJetPawn* Plane = Cast<AArcadeJetPawn>(GetOwner()))
+		{
+			Plane->SetVisualBank(Snapshot.VisualBankDegrees);
+		}
 	}
 }
 
@@ -252,6 +291,7 @@ void UArcadeFlightComponent::InterpolateBufferedState()
 
 	FVector RenderLocation = SnapshotBuffer[0].Location;
 	FQuat RenderRotation = SnapshotBuffer[0].Rotation;
+	float RenderVisualBank = SnapshotBuffer[0].VisualBankDegrees;
 	if (SnapshotBuffer.Num() >= 2)
 	{
 		const FBufferedFlightState& From = SnapshotBuffer[0];
@@ -262,17 +302,24 @@ void UArcadeFlightComponent::InterpolateBufferedState()
 			const float Alpha = FMath::Clamp(static_cast<float>((RenderTime - From.ServerTimeSeconds) / Duration), 0.0f, 1.0f);
 			RenderLocation = FMath::Lerp(From.Location, To.Location, Alpha);
 			RenderRotation = FQuat::Slerp(From.Rotation, To.Rotation, Alpha).GetNormalized();
+			RenderVisualBank = FMath::Lerp(
+				From.VisualBankDegrees, To.VisualBankDegrees, Alpha);
 		}
 		else if (RenderTime > To.ServerTimeSeconds)
 		{
 			const float Extrapolation = FMath::Min(static_cast<float>(RenderTime - To.ServerTimeSeconds), MaxExtrapolationTime);
 			RenderLocation = To.Location + To.Velocity * Extrapolation;
 			RenderRotation = To.Rotation;
+			RenderVisualBank = To.VisualBankDegrees;
 		}
 	}
 
 	GetOwner()->SetActorLocationAndRotation(RenderLocation, RenderRotation, false, nullptr,
 		ETeleportType::None);
+	if (AArcadeJetPawn* Plane = Cast<AArcadeJetPawn>(GetOwner()))
+	{
+		Plane->SetVisualBank(RenderVisualBank);
+	}
 	const FVector RenderForward = RenderRotation.GetForwardVector();
 	CurrentVelocity = SnapshotBuffer.Num() >= 2 ? SnapshotBuffer[1].Velocity : SnapshotBuffer[0].Velocity;
 	CurrentForwardSpeed = FMath::Max(0.0f, FVector::DotProduct(CurrentVelocity, RenderForward));
@@ -295,9 +342,7 @@ void UArcadeFlightComponent::RotateAircraft(const float DeltaTime, const FJetFli
 			? Stats.HoverPitch
 			: FMath::FInterpTo(CurrentRotation.Pitch, TargetPitch, DeltaTime, Stats.HoverRotationResponse);
 		const float NewYaw = CurrentRotation.Yaw;
-		const float NewRoll = FMath::FInterpTo(CurrentRotation.Roll, 0.0f, DeltaTime,
-			Stats.HoverRotationResponse);
-		GetOwner()->SetActorRotation(FRotator(NewPitch, NewYaw, NewRoll));
+		GetOwner()->SetActorRotation(FRotator(NewPitch, NewYaw, 0.0f));
 		if (HoverState == EArcadeHoverState::Leaving && FMath::Abs(NewPitch) <= 0.5f)
 		{
 			GetOwner()->SetActorRotation(FRotator(0.0f, NewYaw, 0.0f));
@@ -313,14 +358,35 @@ void UArcadeFlightComponent::RotateAircraft(const float DeltaTime, const FJetFli
 		CurrentRotation.Pitch + SmoothedSteering.Y * Stats.MaxPitchTurnRate * TurnRateMultiplier * DeltaTime,
 		-Stats.MaxPitch, Stats.MaxPitch);
 
-	// Positive mouse yaw banks this aircraft model clockwise around its forward X axis:
-	// right wing down for a right turn, left wing down for a left turn.
-	const float VisualBank = SmoothedSteering.X * Stats.MaxVisualBank;
-	const float StrafeBank = -SmoothedStrafe * Stats.MaxStrafeBank;
-	const float StrafePriority = FMath::Clamp(FMath::Abs(SmoothedStrafe), 0.0f, 1.0f);
-	const float TargetRoll = FMath::Lerp(VisualBank, StrafeBank, StrafePriority);
-	const float NewRoll = FMath::FInterpTo(CurrentRotation.Roll, TargetRoll, DeltaTime, Stats.RotationResponsiveness);
-	GetOwner()->SetActorRotation(FRotator(NewPitch, NewYaw, NewRoll));
+	// The actor is the invisible flight model and never receives visual bank.
+	GetOwner()->SetActorRotation(FRotator(NewPitch, NewYaw, 0.0f));
+}
+
+void UArcadeFlightComponent::UpdateVisualBank(const float DeltaTime)
+{
+	AArcadeJetPawn* Plane = Cast<AArcadeJetPawn>(GetOwner());
+	if (!Plane || DeltaTime <= UE_SMALL_NUMBER)
+	{
+		return;
+	}
+
+	const float FlightAlpha = 1.0f - FMath::Clamp(HoverPresentationAlpha, 0.0f, 1.0f);
+	// Unreal and the original DirectX renderer use opposite roll signs.
+	// Positive screen yaw must bank the visible model in the intended direction.
+	const float TurnBank = SmoothedSteering.X * ArcadeFlightTuning::MaxVisualBankDegrees;
+	const float StrafeBank = SmoothedStrafe * ArcadeFlightTuning::MaxVisualBankDegrees;
+	const bool bStrafeInfluencesBank = FMath::Abs(RawStrafe) > KINDA_SMALL_NUMBER
+		|| FMath::Abs(SmoothedStrafe) > 0.01f;
+	const float TargetBankDegrees = (bStrafeInfluencesBank ? StrafeBank : TurnBank) * FlightAlpha;
+
+	// The original game applies bank only to the render matrix. Position and logical
+	// direction stay unified; the camera therefore never inherits this roll.
+	CurrentVisualBankDegrees = FMath::FInterpTo(
+		CurrentVisualBankDegrees,
+		TargetBankDegrees,
+		DeltaTime,
+		ArcadeFlightTuning::VisualBankResponseSpeed);
+	Plane->SetVisualBank(CurrentVisualBankDegrees);
 }
 
 float UArcadeFlightComponent::CalculateTurnRateMultiplier(const FJetFlightStats& Stats) const
@@ -408,15 +474,19 @@ void UArcadeFlightComponent::MoveAircraft(const float DeltaTime, const FJetFligh
 		Stats.ForwardSpeedResponse * DirectionResponseMultiplier);
 	}
 	const float EffectiveStrafe = HoverState == EArcadeHoverState::Flying ? SmoothedStrafe : 0.0f;
+	const float MaximumStrafeSpeed = Stats.ForwardSpeed * Stats.StrafeSpeedMultiplier;
 	const FVector Velocity = GetOwner()->GetActorForwardVector() * CurrentForwardSpeed
-		+ GetOwner()->GetActorRightVector() * EffectiveStrafe * Stats.StrafeSpeed;
+		+ GetOwner()->GetActorRightVector() * EffectiveStrafe * MaximumStrafeSpeed;
 	CurrentVelocity = Velocity;
 
-	FHitResult Hit;
-	GetOwner()->AddActorWorldOffset(Velocity * DeltaTime, true, &Hit);
-	if (Hit.IsValidBlockingHit())
+	const FVector RequestedMove = Velocity * DeltaTime;
+	if (AArcadeJetPawn* Plane = Cast<AArcadeJetPawn>(GetOwner()))
 	{
-		const FVector RemainingMove = Velocity * DeltaTime * (1.0f - Hit.Time);
-		GetOwner()->AddActorWorldOffset(FVector::VectorPlaneProject(RemainingMove, Hit.Normal), true);
+		const FVector AppliedMove = Plane->MovePlaneWithCollision(RequestedMove);
+		CurrentVelocity = DeltaTime > UE_SMALL_NUMBER ? AppliedMove / DeltaTime : FVector::ZeroVector;
+	}
+	else
+	{
+		GetOwner()->AddActorWorldOffset(RequestedMove, false, nullptr, ETeleportType::None);
 	}
 }

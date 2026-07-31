@@ -12,8 +12,23 @@
 #include "Components/InputComponent.h"
 #include "Components/SceneComponent.h"
 #include "Components/StaticMeshComponent.h"
+#include "Engine/World.h"
 #include "GameFramework/PlayerController.h"
 #include "GameFramework/SpringArmComponent.h"
+
+namespace ArcadeJetCameraTuning
+{
+	// The prototype flight camera deliberately stays code-only so old Blueprint values
+	// cannot silently override the behavior while the flight model is established.
+	constexpr float CursorDeadZone = 0.01f;
+	constexpr float FlightDistance = 1500.0f;
+	constexpr float FlightHeight = 80.0f;
+	constexpr float LookAheadDistance = 12000.0f;
+	constexpr float NormalFollowResponse = 3.0f;
+	constexpr float BoostFollowResponse = 4.0f;
+	constexpr float HoverFollowResponse = 8.0f;
+	constexpr float TeleportSnapDistance = 12000.0f;
+}
 
 AArcadeJetPawn::AArcadeJetPawn()
 {
@@ -25,14 +40,20 @@ AArcadeJetPawn::AArcadeJetPawn()
 	SetMinNetUpdateFrequency(15.0f);
 	SetNetCullDistanceSquared(FMath::Square(500000.0f)); // 5 km in Unreal units.
 
+	VirtualFlightRoot = CreateDefaultSubobject<USceneComponent>(TEXT("VirtualFlightRoot"));
+	RootComponent = VirtualFlightRoot;
+
+	VisualRoot = CreateDefaultSubobject<USceneComponent>(TEXT("VisualRoot"));
+	VisualRoot->SetupAttachment(VirtualFlightRoot);
+
 	Collision = CreateDefaultSubobject<UBoxComponent>(TEXT("Collision"));
 	Collision->InitBoxExtent(FVector(240.0f, 110.0f, 60.0f));
 	Collision->SetCollisionProfileName(UCollisionProfile::Pawn_ProfileName);
 	Collision->SetCollisionResponseToChannel(ECC_Visibility, ECR_Block);
-	RootComponent = Collision;
+	Collision->SetupAttachment(VisualRoot);
 
 	PlaneMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("PlaneMesh"));
-	PlaneMesh->SetupAttachment(Collision);
+	PlaneMesh->SetupAttachment(VisualRoot);
 	PlaneMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 
 	JetStats = CreateDefaultSubobject<UJetStatsComponent>(TEXT("JetStats"));
@@ -44,32 +65,31 @@ AArcadeJetPawn::AArcadeJetPawn()
 	RifleGun = CreateDefaultSubobject<URifleGunComponent>(TEXT("RifleGun"));
 
 	RocketSpawnLeft = CreateDefaultSubobject<USceneComponent>(TEXT("RocketSpawnLeft"));
-	RocketSpawnLeft->SetupAttachment(Collision);
+	RocketSpawnLeft->SetupAttachment(VisualRoot);
 	RocketSpawnLeft->SetRelativeLocation(FVector(100.0f, -250.0f, 0.0f));
 	RocketSpawnRight = CreateDefaultSubobject<USceneComponent>(TEXT("RocketSpawnRight"));
-	RocketSpawnRight->SetupAttachment(Collision);
+	RocketSpawnRight->SetupAttachment(VisualRoot);
 	RocketSpawnRight->SetRelativeLocation(FVector(100.0f, 250.0f, 0.0f));
 
 	GunMuzzleLeft = CreateDefaultSubobject<USceneComponent>(TEXT("GunMuzzleLeft"));
-	GunMuzzleLeft->SetupAttachment(Collision);
+	GunMuzzleLeft->SetupAttachment(VisualRoot);
 	GunMuzzleLeft->SetRelativeLocation(FVector(200.0f, -150.0f, 0.0f));
 	GunMuzzleRight = CreateDefaultSubobject<USceneComponent>(TEXT("GunMuzzleRight"));
-	GunMuzzleRight->SetupAttachment(Collision);
+	GunMuzzleRight->SetupAttachment(VisualRoot);
 	GunMuzzleRight->SetRelativeLocation(FVector(200.0f, 150.0f, 0.0f));
 
 	CameraBoom = CreateDefaultSubobject<USpringArmComponent>(TEXT("CameraBoom"));
-	CameraBoom->SetupAttachment(Collision);
-	CameraBoom->TargetArmLength = NormalCameraDistance;
-	CameraBoom->SocketOffset = CurrentCameraSocketOffset;
+	CameraBoom->SetupAttachment(VirtualFlightRoot);
+	CameraBoom->TargetArmLength = 0.0f;
+	CameraBoom->SocketOffset = FVector::ZeroVector;
 	CameraBoom->bUsePawnControlRotation = false;
-	CameraBoom->bInheritPitch = true;
-	CameraBoom->bInheritYaw = true;
+	CameraBoom->bInheritPitch = false;
+	CameraBoom->bInheritYaw = false;
 	CameraBoom->bInheritRoll = false;
-	CameraBoom->SetUsingAbsoluteRotation(true);
-	CameraBoom->bEnableCameraLag = true;
+	CameraBoom->SetAbsolute(true, true, false);
+	CameraBoom->bEnableCameraLag = false;
 	CameraBoom->bEnableCameraRotationLag = false;
-	CameraBoom->CameraLagSpeed = CameraLagSpeed;
-	CameraBoom->bDoCollisionTest = true;
+	CameraBoom->bDoCollisionTest = false;
 
 	FollowCamera = CreateDefaultSubobject<UCameraComponent>(TEXT("FollowCamera"));
 	FollowCamera->SetupAttachment(CameraBoom, USpringArmComponent::SocketName);
@@ -83,9 +103,24 @@ void AArcadeJetPawn::BeginPlay()
 	RocketWeapon->SetSpawnPoints(RocketSpawnLeft, RocketSpawnRight);
 	RifleGun->SetMuzzlePoints(GunMuzzleLeft, GunMuzzleRight);
 	RifleGun->SetCameraAimEnabled(true);
+	VisualRoot->SetRelativeLocationAndRotation(FVector::ZeroVector, FRotator::ZeroRotator);
+	CameraBoom->SetAbsolute(true, true, false);
+	CameraBoom->TargetArmLength = 0.0f;
+	CameraBoom->SocketOffset = FVector::ZeroVector;
+	CameraBoom->bUsePawnControlRotation = false;
+	CameraBoom->bInheritPitch = false;
+	CameraBoom->bInheritYaw = false;
+	CameraBoom->bInheritRoll = false;
+	CameraBoom->bEnableCameraLag = false;
+	CameraBoom->bEnableCameraRotationLag = false;
+	CameraBoom->bDoCollisionTest = false;
 	CurrentHoverCameraDistance = FMath::Clamp(
 		HoverCameraDistance, MinHoverCameraDistance, MaxHoverCameraDistance);
+	CurrentCameraWorldPosition = GetActorLocation()
+		- GetActorForwardVector() * ArcadeJetCameraTuning::FlightDistance
+		+ GetActorUpVector() * ArcadeJetCameraTuning::FlightHeight;
 	CurrentCameraWorldRotation = GetActorRotation();
+	bFlightCameraInitialized = true;
 
 	if (APlayerController* PlayerController = Cast<APlayerController>(GetController()))
 	{
@@ -100,6 +135,52 @@ void AArcadeJetPawn::BeginPlay()
 		PlayerController->GetViewportSize(ViewportWidth, ViewportHeight);
 		PlayerController->SetMouseLocation(ViewportWidth / 2, ViewportHeight / 2);
 	}
+}
+
+void AArcadeJetPawn::SetVisualBank(const float BankDegrees)
+{
+	if (!VisualRoot)
+	{
+		return;
+	}
+	VisualRoot->SetRelativeLocation(FVector::ZeroVector);
+	VisualRoot->SetRelativeRotation(FRotator(0.0f, 0.0f, BankDegrees));
+}
+
+FVector AArcadeJetPawn::MovePlaneWithCollision(const FVector& RequestedMove)
+{
+	if (RequestedMove.IsNearlyZero())
+	{
+		return FVector::ZeroVector;
+	}
+
+	if (!Collision || !GetWorld())
+	{
+		AddActorWorldOffset(RequestedMove, false, nullptr, ETeleportType::None);
+		return RequestedMove;
+	}
+
+	FHitResult Hit;
+	const FCollisionShape Shape = FCollisionShape::MakeBox(Collision->GetScaledBoxExtent());
+	FCollisionQueryParams QueryParams(SCENE_QUERY_STAT(PlaneMovementCollision), false, this);
+	QueryParams.AddIgnoredActor(this);
+	const FVector SweepStart = Collision->GetComponentLocation();
+	const bool bHit = GetWorld()->SweepSingleByProfile(
+		Hit,
+		SweepStart,
+		SweepStart + RequestedMove,
+		Collision->GetComponentQuat(),
+		Collision->GetCollisionProfileName(),
+		Shape,
+		QueryParams);
+
+	const float MoveAlpha = bHit
+		? FMath::Clamp(Hit.Time - 0.001f, 0.0f, 1.0f)
+		: 1.0f;
+	const FVector AppliedMove = RequestedMove * MoveAlpha;
+	AddActorWorldOffset(AppliedMove, false, nullptr, ETeleportType::None);
+	Collision->UpdateOverlaps();
+	return AppliedMove;
 }
 
 void AArcadeJetPawn::SetupPlayerInputComponent(UInputComponent* PlayerInputComponent)
@@ -282,44 +363,71 @@ void AArcadeJetPawn::UpdateCursorInput()
 		}
 	}
 
-	auto ApplyCurve = [this](const float Value)
+	auto ApplyDeadZone = [](const float Value)
 	{
-		const float Absolute = FMath::Abs(Value);
-		if (Absolute <= CursorDeadZone)
-		{
-			return 0.0f;
-		}
-		const float Remapped = (Absolute - CursorDeadZone) / (1.0f - CursorDeadZone);
-		return FMath::Sign(Value) * FMath::Pow(Remapped, CursorResponseExponent);
+		return FMath::Abs(Value) <= ArcadeJetCameraTuning::CursorDeadZone ? 0.0f : Value;
 	};
 
-	CursorSteering.X = ApplyCurve(DesiredX);
-	CursorSteering.Y = ApplyCurve(DesiredY) * (bInvertMouseY ? 1.0f : -1.0f);
+	// Cursor displacement is mapped linearly against each viewport half-axis. Using
+	// width and height independently gives equal normalized authority on 16:9 screens.
+	CursorSteering.X = ApplyDeadZone(DesiredX);
+	CursorSteering.Y = ApplyDeadZone(DesiredY) * (bInvertMouseY ? 1.0f : -1.0f);
 }
 
 void AArcadeJetPawn::UpdateLocalCamera(const float DeltaSeconds)
 {
-	const FVector2D Steering = FlightMovement->GetSmoothedSteering();
-	const float Strafe = FlightMovement->GetSmoothedStrafe();
 	const float BoostAlpha = JetBoost->GetBoostAlpha();
 	const float HoverAlpha = FlightMovement->GetHoverAlpha();
-	const FVector DesiredOffset(
-		0.0f,
-		(Steering.X * MaxCameraSideShift - Strafe * StrafeCameraSideShift) * (1.0f - HoverAlpha),
-		FMath::Lerp(180.0f + Steering.Y * MaxCameraVerticalShift, HoverCameraHeight, HoverAlpha));
-	CurrentCameraSocketOffset = FMath::VInterpTo(
-		CurrentCameraSocketOffset, DesiredOffset, DeltaSeconds, CameraFramingSpeed);
-	CameraBoom->SocketOffset = CurrentCameraSocketOffset;
-	const float FlightCameraDistance = FMath::Lerp(NormalCameraDistance, BoostCameraDistance, BoostAlpha);
-	CameraBoom->TargetArmLength = FMath::Lerp(FlightCameraDistance, CurrentHoverCameraDistance, HoverAlpha);
-	const FRotator ActorViewRotation(GetActorRotation().Pitch, GetActorRotation().Yaw, 0.0f);
-	const FRotator HoverViewRotation(HoverCameraOrbitPitch,
-		GetActorRotation().Yaw + HoverCameraOrbitYaw, 0.0f);
-	const FQuat DesiredCameraRotation = FQuat::Slerp(
-		ActorViewRotation.Quaternion(), HoverViewRotation.Quaternion(), HoverAlpha).GetNormalized();
-	CurrentCameraWorldRotation = FMath::RInterpTo(CurrentCameraWorldRotation,
-		DesiredCameraRotation.Rotator(), DeltaSeconds, CameraRotationFollowSpeed);
-	CameraBoom->SetWorldRotation(CurrentCameraWorldRotation);
+	const FVector PlaneLocation = GetActorLocation();
+	const FVector FlightForward = GetActorForwardVector();
+	const FVector FlightUp = GetActorUpVector();
+	const FVector DesiredFlightEye = PlaneLocation
+		- FlightForward * ArcadeJetCameraTuning::FlightDistance
+		+ FlightUp * ArcadeJetCameraTuning::FlightHeight;
+	const FVector FlightLookTarget = PlaneLocation
+		+ FlightForward * ArcadeJetCameraTuning::LookAheadDistance;
+
+	const FRotator HoverOrbitRotation(
+		HoverCameraOrbitPitch,
+		GetActorRotation().Yaw + HoverCameraOrbitYaw,
+		0.0f);
+	const FVector DesiredHoverEye = PlaneLocation
+		- HoverOrbitRotation.Vector() * CurrentHoverCameraDistance
+		+ FVector::UpVector * HoverCameraHeight;
+	const FVector DesiredEye = FMath::Lerp(DesiredFlightEye, DesiredHoverEye, HoverAlpha);
+
+	const float FlightFollowResponse = FMath::Lerp(
+		ArcadeJetCameraTuning::NormalFollowResponse,
+		ArcadeJetCameraTuning::BoostFollowResponse,
+		BoostAlpha);
+	const float FollowResponse = FMath::Lerp(
+		FlightFollowResponse,
+		ArcadeJetCameraTuning::HoverFollowResponse,
+		HoverAlpha);
+	if (!bFlightCameraInitialized
+		|| FVector::DistSquared(CurrentCameraWorldPosition, DesiredEye)
+			> FMath::Square(ArcadeJetCameraTuning::TeleportSnapDistance))
+	{
+		CurrentCameraWorldPosition = DesiredEye;
+		bFlightCameraInitialized = true;
+	}
+	else
+	{
+		CurrentCameraWorldPosition = FMath::VInterpTo(
+			CurrentCameraWorldPosition, DesiredEye, DeltaSeconds, FollowResponse);
+	}
+
+	// The eye position catches up smoothly, while the target follows the logical
+	// flight direction immediately. This creates the intended chase-camera lag.
+	const FVector LookTarget = FMath::Lerp(FlightLookTarget, PlaneLocation, HoverAlpha);
+	const FVector ViewDirection = LookTarget - CurrentCameraWorldPosition;
+	const FVector CameraUp = FMath::Lerp(FlightUp, FVector::UpVector, HoverAlpha).GetSafeNormal();
+	if (!ViewDirection.IsNearlyZero())
+	{
+		CurrentCameraWorldRotation = FRotationMatrix::MakeFromXZ(
+			ViewDirection.GetSafeNormal(), CameraUp).Rotator();
+	}
+	CameraBoom->SetWorldLocationAndRotation(
+		CurrentCameraWorldPosition, CurrentCameraWorldRotation);
 	FollowCamera->SetFieldOfView(FMath::Lerp(NormalFieldOfView, BoostFieldOfView, BoostAlpha));
-	CameraBoom->CameraLagSpeed = CameraLagSpeed;
 }

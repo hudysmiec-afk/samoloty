@@ -36,11 +36,9 @@ struct FJetFlightStats
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Flight|Direction Speed", meta=(ClampMin="1", ClampMax="3"))
 	float MaxDiveResponseMultiplier = 1.35f;
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Flight", meta=(ClampMin="0"))
-	float StrafeSpeed = 700.0f;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Flight", meta=(ClampMin="0.1"))
-	float StrafeResponseSpeed = 3.5f;
+	/** Maximum lateral speed as a fraction of ForwardSpeed. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Flight", meta=(ClampMin="0", ClampMax="1"))
+	float StrafeSpeedMultiplier = 0.5f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Flight", meta=(ClampMin="0"))
 	float MaxYawTurnRate = 55.0f;
@@ -59,17 +57,8 @@ struct FJetFlightStats
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Flight", meta=(ClampMin="0.1"))
 	float InputSmoothingSpeed = 10.0f;
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Flight", meta=(ClampMin="0.1"))
-	float RotationResponsiveness = 5.0f;
-
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Flight", meta=(ClampMin="0", ClampMax="89"))
 	float MaxPitch = 80.0f;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Flight", meta=(ClampMin="0"))
-	float MaxVisualBank = 35.0f;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Flight", meta=(ClampMin="0", ClampMax="85"))
-	float MaxStrafeBank = 30.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Hover", meta=(ClampMin="0", ClampMax="89"))
 	float HoverPitch = 89.0f;

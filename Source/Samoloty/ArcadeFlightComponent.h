@@ -31,6 +31,9 @@ struct FArcadeFlightNetworkState
 	FVector_NetQuantize100 Velocity;
 
 	UPROPERTY()
+	float VisualBankDegrees = 0.0f;
+
+	UPROPERTY()
 	double ServerTimeSeconds = 0.0;
 
 	UPROPERTY()
@@ -45,6 +48,7 @@ struct FBufferedFlightState
 	FVector Location = FVector::ZeroVector;
 	FQuat Rotation = FQuat::Identity;
 	FVector Velocity = FVector::ZeroVector;
+	float VisualBankDegrees = 0.0f;
 	double ServerTimeSeconds = 0.0;
 	uint16 Sequence = 0;
 };
@@ -104,8 +108,10 @@ private:
 	void ServerRequestExitHover();
 
 	void SimulateFlight(float DeltaTime);
+	void UpdateSmoothedInput(float DeltaTime, const struct FJetFlightStats& Stats);
 	void RotateAircraft(float DeltaTime, const struct FJetFlightStats& Stats);
 	void MoveAircraft(float DeltaTime, const struct FJetFlightStats& Stats);
+	void UpdateVisualBank(float DeltaTime);
 	void UpdateReplicatedState();
 	void InterpolateBufferedState();
 	void UpdateLocalPresentationInput(float DeltaTime);
@@ -140,6 +146,7 @@ private:
 	float RawBrake = 0.0f;
 	float SmoothedBrake = 0.0f;
 	float CurrentForwardSpeed = 0.0f;
+	float CurrentVisualBankDegrees = 0.0f;
 	float HoverPresentationAlpha = 0.0f;
 	FVector CurrentVelocity = FVector::ZeroVector;
 	float TimeSinceInputSent = 0.0f;
