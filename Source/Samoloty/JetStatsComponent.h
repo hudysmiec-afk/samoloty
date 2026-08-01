@@ -55,7 +55,7 @@ struct FJetFlightStats
 	float BoostSpeedTurnMultiplier = 0.7f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Flight", meta=(ClampMin="0.1"))
-	float InputSmoothingSpeed = 10.0f;
+	float BrakeInputResponseSpeed = 10.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Flight", meta=(ClampMin="0", ClampMax="89"))
 	float MaxPitch = 80.0f;
@@ -71,9 +71,6 @@ struct FJetFlightStats
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Hover", meta=(ClampMin="0.1"))
 	float HoverExitAccelerationResponse = 2.5f;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Hover", meta=(ClampMin="0"))
-	float HoverYawTurnRate = 25.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Boost", meta=(ClampMin="1.0"))
 	float BoostSpeedMultiplier = 1.8f;

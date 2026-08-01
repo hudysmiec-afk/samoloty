@@ -34,6 +34,9 @@ public:
 	/** Moves the logical plane while sweeping its box hitbox and returns the applied delta. */
 	FVector MovePlaneWithCollision(const FVector& RequestedMove);
 
+	/** Called by the flight component after movement/interpolation for deterministic camera order. */
+	void UpdateCameraAfterFlight(float DeltaSeconds);
+
 protected:
 	virtual void BeginPlay() override;
 
@@ -93,12 +96,6 @@ protected:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Plane|Input")
 	bool bInvertMouseY = true;
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Plane|Camera", meta=(ClampMin="5", ClampMax="170"))
-	float NormalFieldOfView = 90.0f;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Plane|Camera", meta=(ClampMin="5", ClampMax="170"))
-	float BoostFieldOfView = 105.0f;
-
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Plane|Camera|Hover", meta=(ClampMin="0"))
 	float HoverCameraDistance = 1400.0f;
 
@@ -136,7 +133,6 @@ private:
 	void StartRifleFire();
 	void StopRifleFire();
 	void UpdateCursorInput();
-	void UpdateLocalCamera(float DeltaSeconds);
 
 	FVector2D CursorSteering = FVector2D::ZeroVector;
 	float StrafeInput = 0.0f;
@@ -149,5 +145,4 @@ private:
 	FRotator CurrentCameraWorldRotation = FRotator::ZeroRotator;
 	FVector2D SavedCursorPosition = FVector2D::ZeroVector;
 	bool bHasSavedCursorPosition = false;
-	bool bFlightCameraInitialized = false;
 };

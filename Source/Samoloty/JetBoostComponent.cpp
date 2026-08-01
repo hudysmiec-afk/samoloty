@@ -10,6 +10,7 @@
 UJetBoostComponent::UJetBoostComponent()
 {
 	PrimaryComponentTick.bCanEverTick = true;
+	PrimaryComponentTick.TickGroup = TG_PrePhysics;
 	SetIsReplicatedByDefault(true);
 }
 

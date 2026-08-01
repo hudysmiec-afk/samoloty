@@ -58,7 +58,6 @@ AEnemyPlanePawn::AEnemyPlanePawn()
 void AEnemyPlanePawn::BeginPlay()
 {
 	Super::BeginPlay();
-	JetStats->RecalculateStats();
 	RifleGun->SetMuzzlePoints(GunMuzzleLeft, GunMuzzleRight);
 	RifleGun->SetDamagePlayersOnly(true);
 }

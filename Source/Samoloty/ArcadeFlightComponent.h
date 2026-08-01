@@ -34,10 +34,10 @@ struct FArcadeFlightNetworkState
 	float VisualBankDegrees = 0.0f;
 
 	UPROPERTY()
-	double ServerTimeSeconds = 0.0;
+	uint8 BrakeAlpha = 0;
 
 	UPROPERTY()
-	uint16 Sequence = 0;
+	double ServerTimeSeconds = 0.0;
 
 	UPROPERTY()
 	bool bTeleport = false;
@@ -49,8 +49,8 @@ struct FBufferedFlightState
 	FQuat Rotation = FQuat::Identity;
 	FVector Velocity = FVector::ZeroVector;
 	float VisualBankDegrees = 0.0f;
+	float BrakeAlpha = 0.0f;
 	double ServerTimeSeconds = 0.0;
-	uint16 Sequence = 0;
 };
 
 UCLASS(ClassGroup=(Plane), meta=(BlueprintSpawnableComponent))
@@ -66,12 +66,6 @@ public:
 
 	/** Called by the owning Pawn. Values are normalized to -1..1. */
 	void SetLocalFlightInput(const FVector2D& Steering, float Strafe, float Brake);
-
-	UFUNCTION(BlueprintPure, Category="Plane|Flight")
-	FVector2D GetSmoothedSteering() const { return SmoothedSteering; }
-
-	UFUNCTION(BlueprintPure, Category="Plane|Flight")
-	float GetSmoothedStrafe() const { return SmoothedStrafe; }
 
 	UFUNCTION(BlueprintPure, Category="Plane|Flight")
 	float GetCurrentForwardSpeed() const { return CurrentForwardSpeed; }
@@ -99,7 +93,7 @@ public:
 
 private:
 	UFUNCTION(Server, Unreliable)
-	void ServerSetFlightInput(FVector2D Steering, float Strafe, float Brake, uint16 InputSequence);
+	void ServerSetFlightInput(FVector2D Steering, float Strafe, float Brake);
 
 	UFUNCTION(Server, Reliable)
 	void ServerToggleHover();
@@ -114,7 +108,7 @@ private:
 	void UpdateVisualBank(float DeltaTime);
 	void UpdateReplicatedState();
 	void InterpolateBufferedState();
-	void UpdateLocalPresentationInput(float DeltaTime);
+	void UpdateLocalBrakePresentation(float DeltaTime, const struct FJetFlightStats& Stats);
 	float CalculateTurnRateMultiplier(const struct FJetFlightStats& Stats) const;
 	void SetAuthoritativeHoverState(EArcadeHoverState NewState);
 	void UpdateHoverPresentation(float DeltaTime, const struct FJetFlightStats& Stats);
@@ -139,6 +133,12 @@ private:
 	UPROPERTY(Replicated)
 	EArcadeHoverState HoverState = EArcadeHoverState::Flying;
 
+	UPROPERTY(Transient)
+	TObjectPtr<UJetStatsComponent> CachedStatsComponent;
+
+	UPROPERTY(Transient)
+	TObjectPtr<UJetBoostComponent> CachedBoostComponent;
+
 	FVector2D RawSteering = FVector2D::ZeroVector;
 	FVector2D SmoothedSteering = FVector2D::ZeroVector;
 	float RawStrafe = 0.0f;
@@ -150,6 +150,5 @@ private:
 	float HoverPresentationAlpha = 0.0f;
 	FVector CurrentVelocity = FVector::ZeroVector;
 	float TimeSinceInputSent = 0.0f;
-	uint16 LocalInputSequence = 0;
 	TArray<FBufferedFlightState> SnapshotBuffer;
 };

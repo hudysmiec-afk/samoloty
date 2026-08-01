@@ -22,8 +22,9 @@ namespace ArcadeJetCameraTuning
 	// cannot silently override the behavior while the flight model is established.
 	constexpr float CursorDeadZone = 0.01f;
 	constexpr float FlightDistance = 1500.0f;
-	constexpr float FlightHeight = 80.0f;
-	constexpr float LookAheadDistance = 12000.0f;
+	constexpr float FlightHeight = 360.0f;
+	constexpr float LookAheadDistance = 10000.0f;
+	constexpr float FieldOfView = 105.0f;
 	constexpr float NormalFollowResponse = 3.0f;
 	constexpr float BoostFollowResponse = 4.0f;
 	constexpr float HoverFollowResponse = 8.0f;
@@ -93,13 +94,12 @@ AArcadeJetPawn::AArcadeJetPawn()
 
 	FollowCamera = CreateDefaultSubobject<UCameraComponent>(TEXT("FollowCamera"));
 	FollowCamera->SetupAttachment(CameraBoom, USpringArmComponent::SocketName);
-	FollowCamera->FieldOfView = NormalFieldOfView;
+	FollowCamera->FieldOfView = ArcadeJetCameraTuning::FieldOfView;
 }
 
 void AArcadeJetPawn::BeginPlay()
 {
 	Super::BeginPlay();
-	JetStats->RecalculateStats();
 	RocketWeapon->SetSpawnPoints(RocketSpawnLeft, RocketSpawnRight);
 	RifleGun->SetMuzzlePoints(GunMuzzleLeft, GunMuzzleRight);
 	RifleGun->SetCameraAimEnabled(true);
@@ -114,13 +114,13 @@ void AArcadeJetPawn::BeginPlay()
 	CameraBoom->bEnableCameraLag = false;
 	CameraBoom->bEnableCameraRotationLag = false;
 	CameraBoom->bDoCollisionTest = false;
+	FollowCamera->SetFieldOfView(ArcadeJetCameraTuning::FieldOfView);
 	CurrentHoverCameraDistance = FMath::Clamp(
 		HoverCameraDistance, MinHoverCameraDistance, MaxHoverCameraDistance);
 	CurrentCameraWorldPosition = GetActorLocation()
 		- GetActorForwardVector() * ArcadeJetCameraTuning::FlightDistance
 		+ GetActorUpVector() * ArcadeJetCameraTuning::FlightHeight;
 	CurrentCameraWorldRotation = GetActorRotation();
-	bFlightCameraInitialized = true;
 
 	if (APlayerController* PlayerController = Cast<APlayerController>(GetController()))
 	{
@@ -143,7 +143,6 @@ void AArcadeJetPawn::SetVisualBank(const float BankDegrees)
 	{
 		return;
 	}
-	VisualRoot->SetRelativeLocation(FVector::ZeroVector);
 	VisualRoot->SetRelativeRotation(FRotator(0.0f, 0.0f, BankDegrees));
 }
 
@@ -212,8 +211,6 @@ void AArcadeJetPawn::Tick(const float DeltaSeconds)
 		}
 		UpdateCursorInput();
 		FlightMovement->SetLocalFlightInput(CursorSteering, StrafeInput, BrakeInput);
-		UpdateLocalCamera(DeltaSeconds);
-		RifleGun->SetCameraAim(FollowCamera->GetComponentLocation(), FollowCamera->GetForwardVector());
 	}
 }
 
@@ -374,10 +371,12 @@ void AArcadeJetPawn::UpdateCursorInput()
 	CursorSteering.Y = ApplyDeadZone(DesiredY) * (bInvertMouseY ? 1.0f : -1.0f);
 }
 
-void AArcadeJetPawn::UpdateLocalCamera(const float DeltaSeconds)
+void AArcadeJetPawn::UpdateCameraAfterFlight(const float DeltaSeconds)
 {
 	const float BoostAlpha = JetBoost->GetBoostAlpha();
 	const float HoverAlpha = FlightMovement->GetHoverAlpha();
+	const EArcadeHoverState HoverState = FlightMovement->GetHoverState();
+	const bool bUseFlightCamera = HoverState == EArcadeHoverState::Flying;
 	const FVector PlaneLocation = GetActorLocation();
 	const FVector FlightForward = GetActorForwardVector();
 	const FVector FlightUp = GetActorUpVector();
@@ -386,6 +385,12 @@ void AArcadeJetPawn::UpdateLocalCamera(const float DeltaSeconds)
 		+ FlightUp * ArcadeJetCameraTuning::FlightHeight;
 	const FVector FlightLookTarget = PlaneLocation
 		+ FlightForward * ArcadeJetCameraTuning::LookAheadDistance;
+	const FVector LevelFlightForward = FRotator(0.0f, GetActorRotation().Yaw, 0.0f).Vector();
+	const FVector StableTransitionEye = PlaneLocation
+		- LevelFlightForward * ArcadeJetCameraTuning::FlightDistance
+		+ FVector::UpVector * ArcadeJetCameraTuning::FlightHeight;
+	const FVector StableTransitionLookTarget = PlaneLocation
+		+ LevelFlightForward * ArcadeJetCameraTuning::LookAheadDistance;
 
 	const FRotator HoverOrbitRotation(
 		HoverCameraOrbitPitch,
@@ -394,7 +399,11 @@ void AArcadeJetPawn::UpdateLocalCamera(const float DeltaSeconds)
 	const FVector DesiredHoverEye = PlaneLocation
 		- HoverOrbitRotation.Vector() * CurrentHoverCameraDistance
 		+ FVector::UpVector * HoverCameraHeight;
-	const FVector DesiredEye = FMath::Lerp(DesiredFlightEye, DesiredHoverEye, HoverAlpha);
+	// During entering/leaving, use a level flight basis so aircraft pitch cannot drag
+	// the camera around an arc. HoverAlpha still blends both endpoints, preventing a
+	// hard camera switch when flight control is returned.
+	const FVector FlightEyeForBlend = bUseFlightCamera ? DesiredFlightEye : StableTransitionEye;
+	const FVector DesiredEye = FMath::Lerp(FlightEyeForBlend, DesiredHoverEye, HoverAlpha);
 
 	const float FlightFollowResponse = FMath::Lerp(
 		ArcadeJetCameraTuning::NormalFollowResponse,
@@ -404,12 +413,10 @@ void AArcadeJetPawn::UpdateLocalCamera(const float DeltaSeconds)
 		FlightFollowResponse,
 		ArcadeJetCameraTuning::HoverFollowResponse,
 		HoverAlpha);
-	if (!bFlightCameraInitialized
-		|| FVector::DistSquared(CurrentCameraWorldPosition, DesiredEye)
+	if (FVector::DistSquared(CurrentCameraWorldPosition, DesiredEye)
 			> FMath::Square(ArcadeJetCameraTuning::TeleportSnapDistance))
 	{
 		CurrentCameraWorldPosition = DesiredEye;
-		bFlightCameraInitialized = true;
 	}
 	else
 	{
@@ -417,11 +424,19 @@ void AArcadeJetPawn::UpdateLocalCamera(const float DeltaSeconds)
 			CurrentCameraWorldPosition, DesiredEye, DeltaSeconds, FollowResponse);
 	}
 
-	// The eye position catches up smoothly, while the target follows the logical
-	// flight direction immediately. This creates the intended chase-camera lag.
-	const FVector LookTarget = FMath::Lerp(FlightLookTarget, PlaneLocation, HoverAlpha);
-	const FVector ViewDirection = LookTarget - CurrentCameraWorldPosition;
-	const FVector CameraUp = FMath::Lerp(FlightUp, FVector::UpVector, HoverAlpha).GetSafeNormal();
+	// Blend normalized view directions rather than distant target positions. This
+	// gives a smooth return from looking at the hovering aircraft to looking ahead.
+	const FVector FlightLookForBlend = bUseFlightCamera
+		? FlightLookTarget : StableTransitionLookTarget;
+	const FVector FlightViewDirection =
+		(FlightLookForBlend - CurrentCameraWorldPosition).GetSafeNormal();
+	const FVector HoverViewDirection =
+		(PlaneLocation - CurrentCameraWorldPosition).GetSafeNormal();
+	const FVector ViewDirection = FMath::Lerp(
+		FlightViewDirection, HoverViewDirection, HoverAlpha).GetSafeNormal();
+	const FVector FlightUpForBlend = bUseFlightCamera ? FlightUp : FVector::UpVector;
+	const FVector CameraUp = FMath::Lerp(
+		FlightUpForBlend, FVector::UpVector, HoverAlpha).GetSafeNormal();
 	if (!ViewDirection.IsNearlyZero())
 	{
 		CurrentCameraWorldRotation = FRotationMatrix::MakeFromXZ(
@@ -429,5 +444,5 @@ void AArcadeJetPawn::UpdateLocalCamera(const float DeltaSeconds)
 	}
 	CameraBoom->SetWorldLocationAndRotation(
 		CurrentCameraWorldPosition, CurrentCameraWorldRotation);
-	FollowCamera->SetFieldOfView(FMath::Lerp(NormalFieldOfView, BoostFieldOfView, BoostAlpha));
+	RifleGun->SetCameraAim(FollowCamera->GetComponentLocation(), FollowCamera->GetForwardVector());
 }
