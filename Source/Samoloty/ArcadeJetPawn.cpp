@@ -7,6 +7,7 @@
 #include "JetStatsComponent.h"
 #include "RocketWeaponComponent.h"
 #include "RifleGunComponent.h"
+#include "WeaponSystemComponent.h"
 #include "Camera/CameraComponent.h"
 #include "Components/BoxComponent.h"
 #include "Components/InputComponent.h"
@@ -64,6 +65,7 @@ AArcadeJetPawn::AArcadeJetPawn()
 	FlightMovement = CreateDefaultSubobject<UArcadeFlightComponent>(TEXT("FlightMovement"));
 	RocketWeapon = CreateDefaultSubobject<URocketWeaponComponent>(TEXT("RocketWeapon"));
 	RifleGun = CreateDefaultSubobject<URifleGunComponent>(TEXT("RifleGun"));
+	WeaponSystem = CreateDefaultSubobject<UWeaponSystemComponent>(TEXT("WeaponSystem"));
 
 	RocketSpawnLeft = CreateDefaultSubobject<USceneComponent>(TEXT("RocketSpawnLeft"));
 	RocketSpawnLeft->SetupAttachment(VisualRoot);
@@ -100,9 +102,8 @@ AArcadeJetPawn::AArcadeJetPawn()
 void AArcadeJetPawn::BeginPlay()
 {
 	Super::BeginPlay();
-	RocketWeapon->SetSpawnPoints(RocketSpawnLeft, RocketSpawnRight);
-	RifleGun->SetMuzzlePoints(GunMuzzleLeft, GunMuzzleRight);
-	RifleGun->SetCameraAimEnabled(true);
+	WeaponSystem->ConfigureFirePoints(EWeaponSlot::Gun, GunMuzzleLeft, GunMuzzleRight);
+	WeaponSystem->ConfigureFirePoints(EWeaponSlot::Missile, RocketSpawnLeft, RocketSpawnRight);
 	VisualRoot->SetRelativeLocationAndRotation(FVector::ZeroVector, FRotator::ZeroRotator);
 	CameraBoom->SetAbsolute(true, true, false);
 	CameraBoom->TargetArmLength = 0.0f;
@@ -194,10 +195,14 @@ void AArcadeJetPawn::SetupPlayerInputComponent(UInputComponent* PlayerInputCompo
 	PlayerInputComponent->BindAction(TEXT("PlaneBoost"), IE_Pressed, this, &AArcadeJetPawn::StartBoost);
 	PlayerInputComponent->BindAction(TEXT("PlaneBoost"), IE_Released, this, &AArcadeJetPawn::StopBoost);
 	PlayerInputComponent->BindAction(TEXT("PlaneHover"), IE_Pressed, this, &AArcadeJetPawn::ToggleHover);
-	PlayerInputComponent->BindAction(TEXT("PlaneRocketFire"), IE_Pressed, this, &AArcadeJetPawn::StartRocketFire);
-	PlayerInputComponent->BindAction(TEXT("PlaneRocketFire"), IE_Released, this, &AArcadeJetPawn::StopRocketFire);
-	PlayerInputComponent->BindAction(TEXT("PlaneRifleFire"), IE_Pressed, this, &AArcadeJetPawn::StartRifleFire);
-	PlayerInputComponent->BindAction(TEXT("PlaneRifleFire"), IE_Released, this, &AArcadeJetPawn::StopRifleFire);
+	PlayerInputComponent->BindAction(TEXT("PlaneMissileFire"), IE_Pressed, this, &AArcadeJetPawn::StartMissileFire);
+	PlayerInputComponent->BindAction(TEXT("PlaneMissileFire"), IE_Released, this, &AArcadeJetPawn::StopMissileFire);
+	PlayerInputComponent->BindAction(TEXT("PlaneGunFire"), IE_Pressed, this, &AArcadeJetPawn::StartGunFire);
+	PlayerInputComponent->BindAction(TEXT("PlaneGunFire"), IE_Released, this, &AArcadeJetPawn::StopGunFire);
+	PlayerInputComponent->BindAction(TEXT("PlaneCycleGunWeapon"), IE_Pressed,
+		this, &AArcadeJetPawn::CycleGunWeapon);
+	PlayerInputComponent->BindAction(TEXT("PlaneCycleMissileWeapon"), IE_Pressed,
+		this, &AArcadeJetPawn::CycleMissileWeapon);
 }
 
 void AArcadeJetPawn::Tick(const float DeltaSeconds)
@@ -316,30 +321,40 @@ void AArcadeJetPawn::SetHoverCameraZoom(const float Value)
 		MinHoverCameraDistance, MaxHoverCameraDistance);
 }
 
-void AArcadeJetPawn::StartRocketFire()
+void AArcadeJetPawn::StartMissileFire()
 {
 	if (FlightMovement->GetHoverState() == EArcadeHoverState::Hovering)
 	{
 		BeginHoverCameraOrbit();
 		return;
 	}
-	RocketWeapon->SetFireHeld(true);
+	WeaponSystem->SetFireHeld(EWeaponSlot::Missile, true);
 }
 
-void AArcadeJetPawn::StopRocketFire()
+void AArcadeJetPawn::StopMissileFire()
 {
 	EndHoverCameraOrbit();
-	RocketWeapon->SetFireHeld(false);
+	WeaponSystem->SetFireHeld(EWeaponSlot::Missile, false);
 }
 
-void AArcadeJetPawn::StartRifleFire()
+void AArcadeJetPawn::StartGunFire()
 {
-	RifleGun->SetFireHeld(true);
+	WeaponSystem->SetFireHeld(EWeaponSlot::Gun, true);
 }
 
-void AArcadeJetPawn::StopRifleFire()
+void AArcadeJetPawn::StopGunFire()
 {
-	RifleGun->SetFireHeld(false);
+	WeaponSystem->SetFireHeld(EWeaponSlot::Gun, false);
+}
+
+void AArcadeJetPawn::CycleGunWeapon()
+{
+	WeaponSystem->CycleWeapon(EWeaponSlot::Gun);
+}
+
+void AArcadeJetPawn::CycleMissileWeapon()
+{
+	WeaponSystem->CycleWeapon(EWeaponSlot::Missile);
 }
 
 void AArcadeJetPawn::UpdateCursorInput()
@@ -444,5 +459,6 @@ void AArcadeJetPawn::UpdateCameraAfterFlight(const float DeltaSeconds)
 	}
 	CameraBoom->SetWorldLocationAndRotation(
 		CurrentCameraWorldPosition, CurrentCameraWorldRotation);
-	RifleGun->SetCameraAim(FollowCamera->GetComponentLocation(), FollowCamera->GetForwardVector());
+	WeaponSystem->SetAimContext(
+		FollowCamera->GetComponentLocation(), FollowCamera->GetForwardVector());
 }

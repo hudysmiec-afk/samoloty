@@ -1,7 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
-#include "Components/ActorComponent.h"
+#include "PlaneWeaponComponent.h"
 #include "RifleGunComponent.generated.h"
 
 class ARifleTracerVisual;
@@ -10,7 +10,7 @@ class USceneComponent;
 class USoundBase;
 
 UCLASS(ClassGroup=(Plane), meta=(BlueprintSpawnableComponent))
-class SAMOLOTY_API URifleGunComponent : public UActorComponent
+class SAMOLOTY_API URifleGunComponent : public UPlaneWeaponComponent
 {
 	GENERATED_BODY()
 
@@ -25,9 +25,10 @@ public:
 	void SetDamagePlayersOnly(bool bEnabled) { bDamagePlayersOnly = bEnabled; }
 	void SetCameraAimEnabled(bool bEnabled);
 	void SetCameraAim(const FVector& CameraOrigin, const FVector& CameraDirection);
+	virtual void SetAimContext(const FVector& AimOrigin, const FVector& AimDirection) override;
+	virtual void SetFirePoints(USceneComponent* LeftPoint, USceneComponent* RightPoint) override;
 
-	UFUNCTION(BlueprintCallable, Category="Plane|Weapons|Rifle")
-	void SetFireHeld(bool bHeld);
+	virtual void SetFireHeld(bool bHeld) override;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Plane|Weapons|Rifle|Debug")
 	bool bDrawShotDebug = false;
@@ -62,6 +63,8 @@ protected:
 	TObjectPtr<USoundBase> RifleImpactSound;
 
 private:
+	virtual void OnWeaponEquippedChanged() override;
+
 	UFUNCTION(Server, Reliable)
 	void ServerSetFireHeld(bool bHeld);
 

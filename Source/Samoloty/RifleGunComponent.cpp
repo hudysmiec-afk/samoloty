@@ -17,6 +17,8 @@ URifleGunComponent::URifleGunComponent()
 {
 	PrimaryComponentTick.bCanEverTick = true;
 	SetIsReplicatedByDefault(true);
+	SetWeaponSlot(EWeaponSlot::Gun);
+	SetWeaponDisplayName(TEXT("Rifle"));
 	TracerVisualClass = ARifleTracerVisual::StaticClass();
 }
 
@@ -29,6 +31,20 @@ void URifleGunComponent::SetMuzzlePoints(USceneComponent* InLeftMuzzle, USceneCo
 {
 	LeftMuzzle = InLeftMuzzle;
 	RightMuzzle = InRightMuzzle;
+}
+
+void URifleGunComponent::SetFirePoints(USceneComponent* LeftPoint, USceneComponent* RightPoint)
+{
+	SetMuzzlePoints(LeftPoint, RightPoint);
+}
+
+void URifleGunComponent::SetAimContext(const FVector& AimOrigin, const FVector& AimDirection)
+{
+	if (!bLocalCameraAimEnabled)
+	{
+		SetCameraAimEnabled(true);
+	}
+	SetCameraAim(AimOrigin, AimDirection);
 }
 
 void URifleGunComponent::SetCameraAimEnabled(const bool bEnabled)
@@ -76,6 +92,10 @@ void URifleGunComponent::ServerSetCameraAim_Implementation(
 
 void URifleGunComponent::SetFireHeld(const bool bHeld)
 {
+	if (bHeld && !IsWeaponEquipped())
+	{
+		return;
+	}
 	bLocalFireHeld = bHeld;
 	if (bHeld)
 	{
@@ -108,6 +128,10 @@ void URifleGunComponent::TickComponent(const float DeltaTime, const ELevelTick T
 	FActorComponentTickFunction* ThisTickFunction)
 {
 	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
+	if (!IsWeaponEquipped())
+	{
+		return;
+	}
 	const UJetStatsComponent* Stats = GetOwner()->FindComponentByClass<UJetStatsComponent>();
 	const UHealthComponent* Health = GetOwner()->FindComponentByClass<UHealthComponent>();
 	const UArcadeFlightComponent* Flight = GetOwner()->FindComponentByClass<UArcadeFlightComponent>();
@@ -132,6 +156,15 @@ void URifleGunComponent::TickComponent(const float DeltaTime, const ELevelTick T
 		NextServerShotTime = Now + ShotInterval;
 	}
 	DrawRifleDebug();
+}
+
+void URifleGunComponent::OnWeaponEquippedChanged()
+{
+	bLocalFireHeld = false;
+	if (GetOwner() && GetOwner()->HasAuthority())
+	{
+		bServerFireHeld = false;
+	}
 }
 
 void URifleGunComponent::FirePredictedShot()
@@ -326,7 +359,7 @@ USceneComponent* URifleGunComponent::GetMuzzle(const uint8 MuzzleIndex) const
 void URifleGunComponent::DrawRifleDebug() const
 {
 	const APawn* Pawn = Cast<APawn>(GetOwner());
-	if (!bShowRifleDebug || !Pawn || !Pawn->IsLocallyControlled() || !GEngine)
+	if (!IsWeaponEquipped() || !bShowRifleDebug || !Pawn || !Pawn->IsLocallyControlled() || !GEngine)
 	{
 		return;
 	}

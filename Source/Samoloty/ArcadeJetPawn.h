@@ -16,6 +16,7 @@ class URifleGunComponent;
 class USceneComponent;
 class USpringArmComponent;
 class UStaticMeshComponent;
+class UWeaponSystemComponent;
 
 /** Input, camera and presentation shell for the network-ready flight components. */
 UCLASS(Blueprintable)
@@ -71,6 +72,9 @@ protected:
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Plane|Components")
 	TObjectPtr<URifleGunComponent> RifleGun;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Plane|Components")
+	TObjectPtr<UWeaponSystemComponent> WeaponSystem;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Plane|Weapons")
 	TObjectPtr<USceneComponent> RocketSpawnLeft;
@@ -128,10 +132,12 @@ private:
 	void AddHoverCameraPitchInput(float Value);
 	void BeginHoverCameraOrbit();
 	void EndHoverCameraOrbit();
-	void StartRocketFire();
-	void StopRocketFire();
-	void StartRifleFire();
-	void StopRifleFire();
+	void StartMissileFire();
+	void StopMissileFire();
+	void StartGunFire();
+	void StopGunFire();
+	void CycleGunWeapon();
+	void CycleMissileWeapon();
 	void UpdateCursorInput();
 
 	FVector2D CursorSteering = FVector2D::ZeroVector;

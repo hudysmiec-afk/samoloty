@@ -16,6 +16,8 @@ URocketWeaponComponent::URocketWeaponComponent()
 {
 	PrimaryComponentTick.bCanEverTick = true;
 	SetIsReplicatedByDefault(true);
+	SetWeaponSlot(EWeaponSlot::Missile);
+	SetWeaponDisplayName(TEXT("Rocket Barrage"));
 	RocketClass = ARocketProjectile::StaticClass();
 }
 
@@ -34,8 +36,17 @@ void URocketWeaponComponent::SetSpawnPoints(USceneComponent* InLeftSpawnPoint, U
 	RightSpawnPoint = InRightSpawnPoint;
 }
 
+void URocketWeaponComponent::SetFirePoints(USceneComponent* LeftPoint, USceneComponent* RightPoint)
+{
+	SetSpawnPoints(LeftPoint, RightPoint);
+}
+
 void URocketWeaponComponent::SetFireHeld(const bool bHeld)
 {
+	if (bHeld && !IsWeaponEquipped())
+	{
+		return;
+	}
 	bLocalFireHeld = bHeld;
 	if (GetOwner()->HasAuthority())
 	{
@@ -65,6 +76,10 @@ void URocketWeaponComponent::TickComponent(const float DeltaTime, const ELevelTi
 	FActorComponentTickFunction* ThisTickFunction)
 {
 	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
+	if (!IsWeaponEquipped())
+	{
+		return;
+	}
 	if (GetOwner()->HasAuthority())
 	{
 		const UArcadeFlightComponent* Flight = GetOwner()->FindComponentByClass<UArcadeFlightComponent>();
@@ -101,6 +116,20 @@ void URocketWeaponComponent::TickComponent(const float DeltaTime, const ELevelTi
 		UpdateDebugCounts(DeltaTime);
 	}
 	DrawWeaponDebug();
+}
+
+void URocketWeaponComponent::OnWeaponEquippedChanged()
+{
+	bLocalFireHeld = false;
+	if (!GetOwner() || !GetOwner()->HasAuthority())
+	{
+		return;
+	}
+	bServerFireHeld = false;
+	if (WeaponState == ERocketWeaponState::FiringSalvos)
+	{
+		EnterCooldown();
+	}
 }
 
 void URocketWeaponComponent::StartBarrage()
@@ -275,7 +304,8 @@ double URocketWeaponComponent::GetServerTimeSeconds() const
 void URocketWeaponComponent::DrawWeaponDebug() const
 {
 	const APawn* OwnerPawn = Cast<APawn>(GetOwner());
-	if (!bShowWeaponDebug || !OwnerPawn || !OwnerPawn->IsLocallyControlled() || !GEngine)
+	if (!IsWeaponEquipped() || !bShowWeaponDebug || !OwnerPawn
+		|| !OwnerPawn->IsLocallyControlled() || !GEngine)
 	{
 		return;
 	}

@@ -17,6 +17,10 @@ git lfs pull
 
 ## Sterowanie
 
+Klawisz `1` przełącza broń w slocie `Gun`, a `2` przełącza broń w slocie
+`Missile`. Dopóki slot ma tylko jeden typ broni, zostanie wybrany ponownie ten
+sam komponent.
+
 | Sterowanie | Działanie |
 |---|---|
 | Pozycja kursora | Skręt samolotu w poziomie i pionie |
@@ -106,6 +110,14 @@ Lokalny komponent prezentacji odtwarza jednocześnie trzy zapętlone warstwy i p
 
 Warstwa slow reaguje na `S`, a boost ma nad nią priorytet. Na serwerze dedykowanym komponent nie tworzy audio.
 
+### System uzbrojenia
+
+`UWeaponSystemComponent` wybiera niezależnie aktywną broń `Gun` i `Missile`,
+przekazuje input, celowanie oraz punkty wystrzału i replikuje wybór z serwera.
+Każdy typ broni dziedziczy po `UPlaneWeaponComponent`, dzięki czemu następne
+rodzaje uzbrojenia można dodawać bez dopisywania ich obsługi bezpośrednio w
+Pawnie.
+
 ### Walka
 
 - `UHealthComponent` — replikowane HP i śmierć.
@@ -122,6 +134,7 @@ Dokładne założenia znajdują się w:
 - [`Docs/RifleGunDesign.md`](Docs/RifleGunDesign.md)
 - [`Docs/FlightAndAudio.md`](Docs/FlightAndAudio.md)
 - [`Docs/EnemyPlaneAI.md`](Docs/EnemyPlaneAI.md)
+- [`Docs/WeaponSystem.md`](Docs/WeaponSystem.md)
 
 ## Konfiguracja `BP_PlayerPlane`
 
@@ -183,6 +196,7 @@ Nie edytuj równocześnie tego samego `.uasset` lub `.umap` na kilku branchach �
 - [x] HP i serwerowe obrażenia
 - [x] Rocket Barrage
 - [x] RifleGun hitscan
+- [x] Sloty `Gun` i `Missile` oraz serwerowe przełączanie broni
 - [x] Podstawowe VFX i audio uzbrojenia
 - [x] Trzywarstwowe audio silnika
 - [x] Pionowy tryb zawisu i swobodna kamera

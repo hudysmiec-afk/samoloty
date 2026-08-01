@@ -1,7 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
-#include "Components/ActorComponent.h"
+#include "PlaneWeaponComponent.h"
 #include "RocketWeaponComponent.generated.h"
 
 class ARocketProjectile;
@@ -17,7 +17,7 @@ enum class ERocketWeaponState : uint8
 };
 
 UCLASS(ClassGroup=(Plane), meta=(BlueprintSpawnableComponent))
-class SAMOLOTY_API URocketWeaponComponent : public UActorComponent
+class SAMOLOTY_API URocketWeaponComponent : public UPlaneWeaponComponent
 {
 	GENERATED_BODY()
 
@@ -29,9 +29,9 @@ public:
 	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
 
 	void SetSpawnPoints(USceneComponent* InLeftSpawnPoint, USceneComponent* InRightSpawnPoint);
+	virtual void SetFirePoints(USceneComponent* LeftPoint, USceneComponent* RightPoint) override;
 
-	UFUNCTION(BlueprintCallable, Category="Plane|Weapons")
-	void SetFireHeld(bool bHeld);
+	virtual void SetFireHeld(bool bHeld) override;
 
 	UFUNCTION(BlueprintPure, Category="Plane|Weapons")
 	ERocketWeaponState GetWeaponState() const { return WeaponState; }
@@ -51,6 +51,8 @@ protected:
 	TObjectPtr<USoundBase> RocketLaunchSound;
 
 private:
+	virtual void OnWeaponEquippedChanged() override;
+
 	UFUNCTION(Server, Reliable)
 	void ServerSetFireHeld(bool bHeld);
 
