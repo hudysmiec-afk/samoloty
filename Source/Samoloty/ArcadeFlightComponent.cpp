@@ -1,8 +1,10 @@
 #include "ArcadeFlightComponent.h"
 
 #include "ArcadeJetPawn.h"
+#include "EvasiveRollComponent.h"
 #include "JetBoostComponent.h"
 #include "JetStatsComponent.h"
+#include "QuickReversalComponent.h"
 #include "GameFramework/Actor.h"
 #include "GameFramework/GameStateBase.h"
 #include "GameFramework/Pawn.h"
@@ -36,6 +38,8 @@ void UArcadeFlightComponent::BeginPlay()
 	{
 		CachedStatsComponent = Owner->FindComponentByClass<UJetStatsComponent>();
 		CachedBoostComponent = Owner->FindComponentByClass<UJetBoostComponent>();
+		CachedEvasiveRollComponent = Owner->FindComponentByClass<UEvasiveRollComponent>();
+		CachedQuickReversalComponent = Owner->FindComponentByClass<UQuickReversalComponent>();
 		// Input is collected by the Pawn first. Flight then updates the authoritative
 		// transform before the local camera and weapon aim are refreshed.
 		AddTickPrerequisiteActor(Owner);
@@ -67,6 +71,11 @@ void UArcadeFlightComponent::SetLocalFlightInput(const FVector2D& Steering, cons
 
 void UArcadeFlightComponent::ToggleHover()
 {
+	if (HoverState == EArcadeHoverState::Flying)
+	{
+		// Lock local combat immediately instead of waiting for the server round trip.
+		bLocalHoverEntryPending = true;
+	}
 	if (GetOwner()->HasAuthority())
 	{
 		SetAuthoritativeHoverState(
@@ -125,6 +134,10 @@ void UArcadeFlightComponent::TickComponent(const float DeltaTime, const ELevelTi
 	FActorComponentTickFunction* ThisTickFunction)
 {
 	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
+	if (bLocalHoverEntryPending && HoverState != EArcadeHoverState::Flying)
+	{
+		bLocalHoverEntryPending = false;
+	}
 	const APawn* OwnerPawn = Cast<APawn>(GetOwner());
 	const UJetStatsComponent* StatsComponent = CachedStatsComponent;
 	if (StatsComponent)
@@ -340,7 +353,7 @@ void UArcadeFlightComponent::InterpolateBufferedState()
 	}
 	const FVector RenderForward = RenderRotation.GetForwardVector();
 	CurrentVelocity = SnapshotBuffer.Num() >= 2 ? SnapshotBuffer[1].Velocity : SnapshotBuffer[0].Velocity;
-	CurrentForwardSpeed = FMath::Max(0.0f, FVector::DotProduct(CurrentVelocity, RenderForward));
+	CurrentForwardSpeed = FVector::DotProduct(CurrentVelocity, RenderForward);
 }
 
 void UArcadeFlightComponent::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
@@ -353,6 +366,13 @@ void UArcadeFlightComponent::GetLifetimeReplicatedProps(TArray<FLifetimeProperty
 void UArcadeFlightComponent::RotateAircraft(const float DeltaTime, const FJetFlightStats& Stats)
 {
 	const FRotator CurrentRotation = GetOwner()->GetActorRotation();
+	FQuat ManeuverRotation = FQuat::Identity;
+	if (CachedQuickReversalComponent
+		&& CachedQuickReversalComponent->GetAuthoritativeFlightRotation(ManeuverRotation))
+	{
+		GetOwner()->SetActorRotation(ManeuverRotation);
+		return;
+	}
 	if (HoverState != EArcadeHoverState::Flying)
 	{
 		const float TargetPitch = HoverState == EArcadeHoverState::Leaving ? 0.0f : Stats.HoverPitch;
@@ -378,7 +398,8 @@ void UArcadeFlightComponent::RotateAircraft(const float DeltaTime, const FJetFli
 	const float NewYaw = CurrentRotation.Yaw
 		+ SmoothedSteering.X * Stats.MaxYawTurnRate * TurnRateMultiplier * DeltaTime;
 	const float NewPitch = FMath::Clamp(
-		CurrentRotation.Pitch + SmoothedSteering.Y * Stats.MaxPitchTurnRate * TurnRateMultiplier * DeltaTime,
+		CurrentRotation.Pitch + SmoothedSteering.Y * Stats.MaxPitchTurnRate
+			* TurnRateMultiplier * DeltaTime,
 		-Stats.MaxPitch, Stats.MaxPitch);
 
 	// The actor is the invisible flight model and never receives visual bank.
@@ -392,7 +413,6 @@ void UArcadeFlightComponent::UpdateVisualBank(const float DeltaTime)
 	{
 		return;
 	}
-
 	const float FlightAlpha = 1.0f - FMath::Clamp(HoverPresentationAlpha, 0.0f, 1.0f);
 	// Keep the visual roll as its own persistent state. The steering/strafe values
 	// choose an unclamped destination, but the model only travels a frame-sized
@@ -448,6 +468,42 @@ float UArcadeFlightComponent::GetCurrentTurnRateMultiplier() const
 
 void UArcadeFlightComponent::MoveAircraft(const float DeltaTime, const FJetFlightStats& Stats)
 {
+	FVector ManeuverVelocity = FVector::ZeroVector;
+	float ManeuverForwardSpeed = CurrentForwardSpeed;
+	const float MaximumStrafeSpeed = Stats.ForwardSpeed * Stats.StrafeSpeedMultiplier;
+	const FVector DesiredLateralVelocity = GetOwner()->GetActorRightVector()
+		* SmoothedStrafe * MaximumStrafeSpeed;
+	if (CachedQuickReversalComponent
+		&& CachedQuickReversalComponent->ConsumeAuthoritativeMovement(
+			DeltaTime,
+			Stats.ForwardSpeed,
+			Stats.ForwardSpeed * Stats.BoostSpeedMultiplier,
+			DesiredLateralVelocity,
+			ManeuverVelocity,
+			ManeuverForwardSpeed))
+	{
+		// Lateral input remains available, but the skill owns all longitudinal
+		// deceleration and thrust until its inertial reversal has completed.
+		CurrentForwardSpeed = ManeuverForwardSpeed;
+		CurrentVelocity = ManeuverVelocity;
+
+		const FVector RequestedMove = ManeuverVelocity * DeltaTime;
+		if (AArcadeJetPawn* Plane = Cast<AArcadeJetPawn>(GetOwner()))
+		{
+			const FVector AppliedMove = Plane->MovePlaneWithCollision(RequestedMove);
+			CurrentVelocity = DeltaTime > UE_SMALL_NUMBER
+				? AppliedMove / DeltaTime : FVector::ZeroVector;
+		}
+		else
+		{
+			GetOwner()->AddActorWorldOffset(
+				RequestedMove, false, nullptr, ETeleportType::None);
+		}
+		CurrentForwardSpeed = FVector::DotProduct(
+			CurrentVelocity, GetOwner()->GetActorForwardVector());
+		return;
+	}
+
 	if (HoverState == EArcadeHoverState::Entering)
 	{
 		CurrentForwardSpeed = FMath::FInterpTo(CurrentForwardSpeed, 0.0f, DeltaTime,
@@ -498,12 +554,15 @@ void UArcadeFlightComponent::MoveAircraft(const float DeltaTime, const FJetFligh
 			1.0f, Stats.MaxDiveResponseMultiplier, DiveAmount);
 	}
 
-	const float TargetForwardSpeed = PlayerTargetSpeed * DirectionSpeedMultiplier;
+	const float RollSpeedMultiplier = CachedEvasiveRollComponent
+		&& CachedEvasiveRollComponent->IsRolling() ? (2.0f / 3.0f) : 1.0f;
+	const float TargetForwardSpeed = FMath::Max(
+		MinimumSpeed, PlayerTargetSpeed * DirectionSpeedMultiplier * RollSpeedMultiplier);
 	CurrentForwardSpeed = FMath::FInterpTo(CurrentForwardSpeed, TargetForwardSpeed, DeltaTime,
 		Stats.ForwardSpeedResponse * DirectionResponseMultiplier);
 	}
-	const float EffectiveStrafe = HoverState == EArcadeHoverState::Flying ? SmoothedStrafe : 0.0f;
-	const float MaximumStrafeSpeed = Stats.ForwardSpeed * Stats.StrafeSpeedMultiplier;
+	const float EffectiveStrafe = HoverState == EArcadeHoverState::Flying
+		? SmoothedStrafe : 0.0f;
 	const FVector Velocity = GetOwner()->GetActorForwardVector() * CurrentForwardSpeed
 		+ GetOwner()->GetActorRightVector() * EffectiveStrafe * MaximumStrafeSpeed;
 	CurrentVelocity = Velocity;

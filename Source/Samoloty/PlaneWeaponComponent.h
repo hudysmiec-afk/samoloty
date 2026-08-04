@@ -27,6 +27,7 @@ public:
 
 	virtual void SetAimContext(const FVector& AimOrigin, const FVector& AimDirection);
 	virtual void SetFirePoints(USceneComponent* LeftPoint, USceneComponent* RightPoint);
+	virtual void RejectCurrentTarget();
 	virtual void SetWeaponEquipped(bool bEquipped);
 
 	UFUNCTION(BlueprintPure, Category="Plane|Weapons")
@@ -40,6 +41,8 @@ public:
 
 protected:
 	virtual void OnWeaponEquippedChanged();
+	/** Shared local/server gate for mobility states in which weapon fire is invalid. */
+	bool IsOwnerFireBlocked() const;
 	void SetWeaponSlot(EWeaponSlot InSlot) { WeaponSlot = InSlot; }
 	void SetWeaponDisplayName(FName InName) { WeaponDisplayName = InName; }
 

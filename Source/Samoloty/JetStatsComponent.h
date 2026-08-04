@@ -127,6 +127,55 @@ struct FRifleGunStats
 	float TracerWidth = 5.0f;
 };
 
+/** Shared sensor ranges. Weapons still apply their own range and angle limits. */
+USTRUCT(BlueprintType)
+struct FRadarStats
+{
+	GENERATED_BODY()
+
+	/** Maximum range at which a contact is displayed on the radar. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Radar", meta=(ClampMin="0", Units="cm"))
+	float DetectionRange = 50000.0f;
+
+	/** Reserved for optional gun targeting assistance added by equipment later. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Radar", meta=(ClampMin="0", Units="cm"))
+	float GunTargetingRange = 80000.0f;
+
+	/** Maximum sensor range available to guided missile weapons. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Radar", meta=(ClampMin="0", Units="cm"))
+	float MissileTargetingRange = 50000.0f;
+};
+
+USTRUCT(BlueprintType)
+struct FShotgunStats
+{
+	GENERATED_BODY()
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Shotgun", meta=(ClampMin="1"))
+	int32 PelletCount = 12;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Shotgun", meta=(ClampMin="0"))
+	float DamagePerPellet = 75.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Shotgun", meta=(ClampMin="0.1"))
+	float ShotsPerSecond = 1.25f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Shotgun", meta=(ClampMin="0"))
+	float MaxRange = 50000.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Shotgun", meta=(ClampMin="0", ClampMax="45"))
+	float SpreadAngleDegrees = 4.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Shotgun|Visual", meta=(ClampMin="1"))
+	float TracerSpeed = 180000.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Shotgun|Visual", meta=(ClampMin="1"))
+	float TracerLength = 600.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Shotgun|Visual", meta=(ClampMin="0.1"))
+	float TracerWidth = 60.0f;
+};
+
 USTRUCT(BlueprintType)
 struct FRocketBarrageStats
 {
@@ -175,6 +224,71 @@ struct FRocketBarrageStats
 	float ProximityCheckInterval = 0.1f;
 };
 
+USTRUCT(BlueprintType)
+struct FHomingMissileStats
+{
+	GENERATED_BODY()
+
+	/** Number of salvos fired by one complete trigger sequence. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Salvo", meta=(ClampMin="1"))
+	int32 SalvoCount = 1;
+
+	/** Missiles spawned simultaneously in each salvo. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Salvo", meta=(ClampMin="1"))
+	int32 MissilesPerSalvo = 2;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Salvo", meta=(ClampMin="0", Units="s"))
+	float SalvoInterval = 0.4f;
+
+	/** Full cooldown starts after the final salvo. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Salvo", meta=(ClampMin="0", Units="s"))
+	float Cooldown = 1.2f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Missile", meta=(ClampMin="1", Units="cm/s"))
+	float MissileSpeed = 7000.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Missile", meta=(ClampMin="0"))
+	float MissileDamage = 500.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Missile", meta=(ClampMin="1", Units="cm"))
+	float MaxTravelDistance = 200000.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Missile", meta=(ClampMin="0", Units="cm"))
+	float ProximityRadius = 0.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Missile", meta=(ClampMin="0.016", Units="s"))
+	float ProximityCheckInterval = 0.05f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Targeting", meta=(ClampMin="1", Units="cm"))
+	float LockRange = 50000.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Targeting", meta=(ClampMin="0", ClampMax="180", Units="deg"))
+	float LockAngleDegrees = 15.0f;
+
+	/** A manually rejected target cannot be selected again during this time. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Targeting", meta=(ClampMin="0", Units="s"))
+	float TargetRejectDuration = 1.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Guidance", meta=(ClampMin="0", Units="deg/s"))
+	float MaxTurnRateDegreesPerSecond = 90.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Missile", meta=(ClampMin="0", ClampMax="45", Units="deg"))
+	float SpreadAngleDegrees = 1.0f;
+
+	/** Forward length of the shared distance-driven launch separation curve. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Missile|Separation", meta=(ClampMin="0", Units="cm"))
+	float SeparationForwardDistance = 800.0f;
+
+	/** Maximum randomized side/up offset reached at the end of separation. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Missile|Separation", meta=(ClampMin="0", Units="cm"))
+	float SeparationRadius = 125.0f;
+
+	/** Length of Bezier control handles relative to forward separation distance. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Missile|Separation",
+		meta=(ClampMin="0.05", ClampMax="0.75"))
+	float SeparationCurveStrength = 0.35f;
+};
+
 UCLASS(ClassGroup=(Plane), meta=(BlueprintSpawnableComponent))
 class SAMOLOTY_API UJetStatsComponent : public UActorComponent
 {
@@ -191,17 +305,29 @@ public:
 	const FJetCombatStats& GetCombatStats() const { return EffectiveCombatStats; }
 
 	UFUNCTION(BlueprintPure, Category="Plane|Stats")
+	const FRadarStats& GetRadarStats() const { return EffectiveRadarStats; }
+
+	UFUNCTION(BlueprintPure, Category="Plane|Stats")
 	const FRocketBarrageStats& GetRocketBarrageStats() const { return EffectiveRocketBarrageStats; }
 
 	UFUNCTION(BlueprintPure, Category="Plane|Stats")
+	const FHomingMissileStats& GetHomingMissileStats() const { return EffectiveHomingMissileStats; }
+
+	UFUNCTION(BlueprintPure, Category="Plane|Stats")
 	const FRifleGunStats& GetRifleGunStats() const { return EffectiveRifleGunStats; }
+
+	UFUNCTION(BlueprintPure, Category="Plane|Stats")
+	const FShotgunStats& GetShotgunStats() const { return EffectiveShotgunStats; }
 
 	UFUNCTION(BlueprintCallable, Category="Plane|Stats")
 	void RecalculateStats();
 
 	void SetBaseFlightStats(const FJetFlightStats& InStats) { BaseFlightStats = InStats; }
 	void SetBaseCombatStats(const FJetCombatStats& InStats) { BaseCombatStats = InStats; }
+	void SetBaseRadarStats(const FRadarStats& InStats) { BaseRadarStats = InStats; }
 	void SetBaseRifleGunStats(const FRifleGunStats& InStats) { BaseRifleGunStats = InStats; }
+	void SetBaseShotgunStats(const FShotgunStats& InStats) { BaseShotgunStats = InStats; }
+	void SetBaseHomingMissileStats(const FHomingMissileStats& InStats) { BaseHomingMissileStats = InStats; }
 
 protected:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Plane|Stats")
@@ -217,14 +343,32 @@ protected:
 	FJetCombatStats EffectiveCombatStats;
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Plane|Stats")
+	FRadarStats BaseRadarStats;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Plane|Stats")
+	FRadarStats EffectiveRadarStats;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Plane|Stats")
 	FRocketBarrageStats BaseRocketBarrageStats;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Plane|Stats")
 	FRocketBarrageStats EffectiveRocketBarrageStats;
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Plane|Stats")
+	FHomingMissileStats BaseHomingMissileStats;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Plane|Stats")
+	FHomingMissileStats EffectiveHomingMissileStats;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Plane|Stats")
 	FRifleGunStats BaseRifleGunStats;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Plane|Stats")
 	FRifleGunStats EffectiveRifleGunStats;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Plane|Stats")
+	FShotgunStats BaseShotgunStats;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Plane|Stats")
+	FShotgunStats EffectiveShotgunStats;
 };

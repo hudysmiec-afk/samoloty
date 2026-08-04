@@ -3,6 +3,7 @@
 #include "ArcadeFlightComponent.h"
 #include "HealthComponent.h"
 #include "JetStatsComponent.h"
+#include "RocketLaunchPattern.h"
 #include "RocketProjectile.h"
 #include "Components/SceneComponent.h"
 #include "Engine/Engine.h"
@@ -60,13 +61,17 @@ void URocketWeaponComponent::SetFireHeld(const bool bHeld)
 
 void URocketWeaponComponent::ServerSetFireHeld_Implementation(const bool bHeld)
 {
+	if (bHeld && !IsWeaponEquipped())
+	{
+		return;
+	}
 	SetAuthoritativeFireHeld(bHeld);
 }
 
 void URocketWeaponComponent::SetAuthoritativeFireHeld(const bool bHeld)
 {
 	bServerFireHeld = bHeld;
-	if (bHeld && WeaponState == ERocketWeaponState::Ready)
+	if (bHeld && WeaponState == ERocketWeaponState::Ready && !IsOwnerFireBlocked())
 	{
 		StartBarrage();
 	}
@@ -80,11 +85,18 @@ void URocketWeaponComponent::TickComponent(const float DeltaTime, const ELevelTi
 	{
 		return;
 	}
+	if (IsOwnerFireBlocked())
+	{
+		UpdateDebugCounts(DeltaTime);
+		DrawWeaponDebug();
+		return;
+	}
 	if (GetOwner()->HasAuthority())
 	{
 		const UArcadeFlightComponent* Flight = GetOwner()->FindComponentByClass<UArcadeFlightComponent>();
-		if (Flight && Flight->GetHoverState() == EArcadeHoverState::Hovering)
+		if (Flight && Flight->GetHoverState() != EArcadeHoverState::Flying)
 		{
+			bServerFireHeld = false;
 			if (WeaponState == ERocketWeaponState::FiringSalvos)
 			{
 				WeaponState = ERocketWeaponState::Ready;
@@ -134,12 +146,13 @@ void URocketWeaponComponent::OnWeaponEquippedChanged()
 
 void URocketWeaponComponent::StartBarrage()
 {
-	if (!GetOwner()->HasAuthority() || WeaponState != ERocketWeaponState::Ready)
+	if (!GetOwner()->HasAuthority() || WeaponState != ERocketWeaponState::Ready
+		|| IsOwnerFireBlocked())
 	{
 		return;
 	}
 	const UArcadeFlightComponent* Flight = GetOwner()->FindComponentByClass<UArcadeFlightComponent>();
-	if (Flight && Flight->GetHoverState() == EArcadeHoverState::Hovering)
+	if (Flight && Flight->GetHoverState() != EArcadeHoverState::Flying)
 	{
 		return;
 	}
@@ -226,35 +239,28 @@ void URocketWeaponComponent::SpawnRocket(USceneComponent* SpawnPoint, const bool
 	}
 	const FRocketBarrageStats& Stats = StatsComponent->GetRocketBarrageStats();
 
-	const float SectorAlpha = (static_cast<float>(SideIndex) + RandomStream.FRand()) / SideCount;
-	const float StartAngle = bLeftSide ? HALF_PI : -HALF_PI;
-	const float DiskAngle = StartAngle + SectorAlpha * PI;
-	const float RadiusAlpha = FMath::Sqrt(RandomStream.FRand());
-	const float SpreadTangent = FMath::Tan(FMath::DegreesToRadians(Stats.SpreadAngleDegrees));
 	const FVector Forward = GetOwner()->GetActorForwardVector();
-	const FVector SideOffset = GetOwner()->GetActorRightVector() * FMath::Cos(DiskAngle)
-		+ GetOwner()->GetActorUpVector() * FMath::Sin(DiskAngle);
-	const FVector Direction = (Forward + SideOffset * SpreadTangent * RadiusAlpha).GetSafeNormal();
-	const float SeparationForwardDistance = FMath::Max(0.0f, Stats.SeparationForwardDistance);
-	const FVector SeparationOffset = SideOffset * Stats.SeparationRadius * RadiusAlpha;
 	const FVector StartLocation = SpawnPoint->GetComponentLocation();
 	const FVector CommonFormationCenter = LeftSpawnPoint.IsValid() && RightSpawnPoint.IsValid()
 		? (LeftSpawnPoint->GetComponentLocation() + RightSpawnPoint->GetComponentLocation()) * 0.5f
 		: GetOwner()->GetActorLocation();
-	const FVector SeparationEnd = CommonFormationCenter + Forward * SeparationForwardDistance + SeparationOffset;
-	const FVector LateralTravel = SeparationEnd - (StartLocation + Forward * SeparationForwardDistance);
-	const float ControlHandleLength = SeparationForwardDistance * Stats.SeparationCurveStrength;
-	const FVector ControlPoint1 = StartLocation + Forward * (ControlHandleLength * 0.35f)
-		+ LateralTravel * 0.35f;
-	const FVector ControlPoint2 = SeparationEnd - Direction * ControlHandleLength;
+	FRocketSeparationSettings SeparationSettings;
+	SeparationSettings.SpreadAngleDegrees = Stats.SpreadAngleDegrees;
+	SeparationSettings.ForwardDistance = Stats.SeparationForwardDistance;
+	SeparationSettings.Radius = Stats.SeparationRadius;
+	SeparationSettings.CurveStrength = Stats.SeparationCurveStrength;
+	const FRocketSeparationPath SeparationPath = RocketLaunchPattern::BuildSeparationPath(
+		StartLocation, CommonFormationCenter, Forward, GetOwner()->GetActorRightVector(),
+		GetOwner()->GetActorUpVector(), bLeftSide, SideIndex, SideCount, RandomStream,
+		SeparationSettings);
 
 	FRocketLaunchData Data;
-	Data.StartLocation = StartLocation;
-	Data.Direction = Direction;
-	Data.SeparationControlPoint1 = ControlPoint1;
-	Data.SeparationControlPoint2 = ControlPoint2;
-	Data.SeparationEndPoint = SeparationEnd;
-	Data.bUseSeparationCurve = SeparationForwardDistance > KINDA_SMALL_NUMBER;
+	Data.StartLocation = SeparationPath.StartLocation;
+	Data.Direction = SeparationPath.Direction;
+	Data.SeparationControlPoint1 = SeparationPath.ControlPoint1;
+	Data.SeparationControlPoint2 = SeparationPath.ControlPoint2;
+	Data.SeparationEndPoint = SeparationPath.EndPoint;
+	Data.bUseSeparationCurve = SeparationPath.bUseCurve;
 	Data.Speed = Stats.RocketSpeed;
 	Data.Damage = Stats.RocketDamage;
 	Data.MaxTravelDistance = Stats.MaxTravelDistance;
@@ -264,7 +270,9 @@ void URocketWeaponComponent::SpawnRocket(USceneComponent* SpawnPoint, const bool
 	Data.GuidanceMode = ERocketGuidanceMode::Straight;
 	Data.bDrawDebug = bDrawRocketDebug;
 
-	const FVector InitialDirection = (ControlPoint1 - StartLocation).GetSafeNormal(SMALL_NUMBER, Direction);
+	const FVector InitialDirection =
+		(SeparationPath.ControlPoint1 - SeparationPath.StartLocation).GetSafeNormal(
+			SMALL_NUMBER, SeparationPath.Direction);
 	const FTransform SpawnTransform(InitialDirection.Rotation(), Data.StartLocation);
 	APawn* OwnerPawn = Cast<APawn>(GetOwner());
 	ARocketProjectile* Rocket = GetWorld()->SpawnActorDeferred<ARocketProjectile>(RocketClass, SpawnTransform,

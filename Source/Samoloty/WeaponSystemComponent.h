@@ -27,6 +27,9 @@ public:
 	UFUNCTION(BlueprintCallable, Category="Plane|Weapons|Debug")
 	void CycleWeapon(EWeaponSlot Slot);
 
+	UFUNCTION(BlueprintCallable, Category="Plane|Weapons")
+	void RejectCurrentTarget(EWeaponSlot Slot);
+
 	UFUNCTION(BlueprintPure, Category="Plane|Weapons")
 	UPlaneWeaponComponent* GetActiveWeapon(EWeaponSlot Slot) const;
 

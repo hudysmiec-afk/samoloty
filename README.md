@@ -86,7 +86,7 @@ Centralne źródło bazowych i efektywnych statystyk lotu oraz uzbrojenia. Obejm
 - mnożniki zwrotności dla małej prędkości i boosta,
 - energię i mnożnik prędkości boosta,
 - HP,
-- parametry Rocket Barrage i RifleGun.
+- parametry Rocket Barrage, RifleGun i Shotgun.
 
 W przyszłości będzie agregował modyfikatory z przedmiotów, perków i drzewa pasywnego.
 
@@ -124,6 +124,7 @@ Pawnie.
 - `URocketWeaponComponent` — salwy, cooldown, spawn rakiet i dźwięk wystrzału salwy.
 - `ARocketProjectile` — ruch, sweep, proximity, obrażenia, Niagara i dźwięk eksplozji.
 - `URifleGunComponent` — szybkostrzelność, serwerowy hitscan, obrażenia i synchronizacja kosmetyki.
+- `UShotgunGunComponent` — serwerowy wielośrutowy hitscan z rozrzutem i kosmetyką klienta.
 - `ARifleTracerVisual` — lekki, niereplikowany wizualny pocisk bez kolizji i damage.
 - `AEnemyPlanePawn` — konfigurowalna baza Blueprinta przeciwnika z boxem kolizji.
 - `UEnemyPlaneAIComponent` — roaming, wybór gracza, nalot, odlot, nawrót i wygładzanie sieciowe.
@@ -135,6 +136,7 @@ Dokładne założenia znajdują się w:
 - [`Docs/FlightAndAudio.md`](Docs/FlightAndAudio.md)
 - [`Docs/EnemyPlaneAI.md`](Docs/EnemyPlaneAI.md)
 - [`Docs/WeaponSystem.md`](Docs/WeaponSystem.md)
+- [`Docs/ShotgunDesign.md`](Docs/ShotgunDesign.md)
 
 ## Konfiguracja `BP_PlayerPlane`
 
@@ -154,9 +156,10 @@ JetStats → Base Rifle Gun Stats
 JetEngineAudio → Engine loops
 RocketWeapon → Rocket class i launch sound
 RifleGun → tracer, Niagara i audio
+ShotgunGun → tracer, Niagara i audio
 ```
 
-Główna kapsuła jest obecnie zarówno kolizją ruchu, jak i uproszczonym celem broni. Musi blokować kanał `Visibility`, ponieważ RifleGun wykonuje trace na tym kanale. Dokładne hitboxy kadłuba i skrzydeł są zadaniem późniejszym.
+Główny box jest obecnie zarówno kolizją ruchu, jak i uproszczonym celem broni. Korzysta z profilu `PlanePawn`, który blokuje kanał `Visibility` używany przez hitscan. Dokładne hitboxy kadłuba i skrzydeł są zadaniem późniejszym.
 
 ## Multiplayer
 
@@ -197,6 +200,7 @@ Nie edytuj równocześnie tego samego `.uasset` lub `.umap` na kilku branchach �
 - [x] Rocket Barrage
 - [x] RifleGun hitscan
 - [x] Sloty `Gun` i `Missile` oraz serwerowe przełączanie broni
+- [x] Prowizoryczny Shotgun do testowania drugiego typu `Gun`
 - [x] Podstawowe VFX i audio uzbrojenia
 - [x] Trzywarstwowe audio silnika
 - [x] Pionowy tryb zawisu i swobodna kamera

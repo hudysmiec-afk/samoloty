@@ -97,17 +97,9 @@ void URifleGunComponent::SetFireHeld(const bool bHeld)
 		return;
 	}
 	bLocalFireHeld = bHeld;
-	if (bHeld)
-	{
-		NextLocalShotTime = 0.0;
-	}
 	if (GetOwner()->HasAuthority())
 	{
 		bServerFireHeld = bHeld;
-		if (bHeld)
-		{
-			NextServerShotTime = 0.0;
-		}
 	}
 	else
 	{
@@ -117,11 +109,17 @@ void URifleGunComponent::SetFireHeld(const bool bHeld)
 
 void URifleGunComponent::ServerSetFireHeld_Implementation(const bool bHeld)
 {
-	bServerFireHeld = bHeld;
-	if (bHeld)
+	if (bHeld && !IsWeaponEquipped())
 	{
-		NextServerShotTime = 0.0;
+		return;
 	}
+	const UArcadeFlightComponent* Flight = GetOwner()->FindComponentByClass<UArcadeFlightComponent>();
+	if (bHeld && Flight && Flight->GetHoverState() != EArcadeHoverState::Flying)
+	{
+		bServerFireHeld = false;
+		return;
+	}
+	bServerFireHeld = bHeld;
 }
 
 void URifleGunComponent::TickComponent(const float DeltaTime, const ELevelTick TickType,
@@ -136,12 +134,24 @@ void URifleGunComponent::TickComponent(const float DeltaTime, const ELevelTick T
 	const UHealthComponent* Health = GetOwner()->FindComponentByClass<UHealthComponent>();
 	const UArcadeFlightComponent* Flight = GetOwner()->FindComponentByClass<UArcadeFlightComponent>();
 	if (!Stats || (Health && Health->IsDead())
-		|| (Flight && Flight->GetHoverState() == EArcadeHoverState::Hovering))
+		|| (Flight && Flight->GetHoverState() != EArcadeHoverState::Flying))
+	{
+		if (Flight && Flight->GetHoverState() != EArcadeHoverState::Flying)
+		{
+			bLocalFireHeld = false;
+			if (GetOwner()->HasAuthority())
+			{
+				bServerFireHeld = false;
+			}
+		}
+		DrawRifleDebug();
+		return;
+	}
+	if (IsOwnerFireBlocked())
 	{
 		DrawRifleDebug();
 		return;
 	}
-
 	const double Now = GetWorld()->GetTimeSeconds();
 	const double ShotInterval = 1.0 / FMath::Max(0.1f, Stats->GetRifleGunStats().ShotsPerSecond);
 	const APawn* Pawn = Cast<APawn>(GetOwner());

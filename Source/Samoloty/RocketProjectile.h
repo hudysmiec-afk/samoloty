@@ -64,8 +64,34 @@ struct FRocketLaunchData
 	UPROPERTY()
 	ERocketGuidanceMode GuidanceMode = ERocketGuidanceMode::Straight;
 
+	/** Assigned target is fixed for the projectile lifetime; missiles never auto-retarget. */
+	UPROPERTY()
+	TObjectPtr<AActor> HomingTarget;
+
+	UPROPERTY()
+	float MaxTurnRateDegreesPerSecond = 0.0f;
+
 	UPROPERTY()
 	bool bDrawDebug = false;
+};
+
+/** Sparse authoritative correction used only by moving-target homing projectiles. */
+USTRUCT()
+struct FHomingMissileNetState
+{
+	GENERATED_BODY()
+
+	UPROPERTY()
+	FVector_NetQuantize100 Location;
+
+	UPROPERTY()
+	FVector_NetQuantizeNormal Direction = FVector::ForwardVector;
+
+	UPROPERTY()
+	float DistanceTraveled = 0.0f;
+
+	UPROPERTY()
+	double ServerTime = 0.0;
 };
 
 UCLASS(Blueprintable)
@@ -109,6 +135,10 @@ protected:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Rocket|Effects", meta=(ClampMin="0.05"))
 	float ExplosionReplicationDelay = 0.25f;
 
+	/** Keeps the Niagara explosion visible even when the gameplay detonation radius is zero. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Rocket|Effects", meta=(ClampMin="0", Units="cm"))
+	float MinimumExplosionVisualRadius = 150.0f;
+
 private:
 	UFUNCTION()
 	void OnRep_LaunchData();
@@ -116,15 +146,24 @@ private:
 	UFUNCTION()
 	void OnRep_Exploded();
 
+	UFUNCTION()
+	void OnRep_HomingNetState();
+
 	void ApplyLaunchState();
 	void SimulateRocketMovement(float DeltaSeconds);
+	void SimulateHomingMovement(float DeltaSeconds);
+	void UpdateHomingNetState();
 	void BuildSeparationCurveCache();
 	FVector EvaluateSeparationCurve(float Parameter) const;
 	float FindCurveParameterForDistance(float Distance) const;
 	FVector GetLocationAtDistance(float Distance) const;
 	FVector GetDirectionAtDistance(float Distance) const;
 	bool CheckPhysicalCollision(const FVector& Start, const FVector& End, FHitResult& OutHit) const;
-	AActor* FindProximityTarget() const;
+	AActor* FindProximityTarget(const FVector& QueryLocation) const;
+	AActor* GetLiveHomingTarget() const;
+	void BreakHomingAfterEvade(AActor* EvadingActor);
+	FVector RotateDirectionTowards(const FVector& CurrentDirection,
+		const FVector& DesiredDirection, float DeltaSeconds) const;
 	void Explode(AActor* DamageTarget, const FVector& ImpactLocation);
 	void PlayExplosionCosmetics();
 
@@ -137,13 +176,25 @@ private:
 	UPROPERTY(Replicated)
 	FVector_NetQuantize100 ExplosionLocation;
 
+	UPROPERTY(ReplicatedUsing=OnRep_HomingNetState)
+	FHomingMissileNetState HomingNetState;
+
+	/** Set only when this missile actually reaches an evading target during its roll. */
+	UPROPERTY(Replicated)
+	bool bHomingDisabled = false;
+
 	float DistanceTraveled = 0.0f;
 	float TimeSinceProximityCheck = 0.0f;
+	float HomingNetUpdateAccumulator = 0.0f;
 	float SeparationCurveLength = 0.0f;
 	static constexpr int32 SeparationCurveSamples = 16;
 	float SeparationCurveCumulativeDistances[SeparationCurveSamples + 1] = {};
 	bool bInitialized = false;
 	bool bCountedOnServer = false;
+	bool bHasHomingCorrection = false;
+	FVector CurrentHomingDirection = FVector::ForwardVector;
+	FVector HomingCorrectionLocation = FVector::ZeroVector;
+	FVector HomingCorrectionDirection = FVector::ForwardVector;
 
 	static int32 ServerActiveRocketCount;
 };

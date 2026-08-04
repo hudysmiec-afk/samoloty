@@ -43,9 +43,10 @@ void UJetEngineAudioComponent::TickComponent(const float DeltaTime, const ELevel
 	}
 
 	const float BoostWeight = FMath::Clamp(Boost->GetBoostAlpha(), 0.0f, 1.0f);
+	const float EnginePower = FMath::Clamp(Boost->GetEnginePowerAlpha(), 0.0f, 1.0f);
 	const float BrakeWeight = FMath::Clamp(Flight->GetSmoothedBrake(), 0.0f, 1.0f);
-	const float SlowWeight = BrakeWeight * (1.0f - BoostWeight);
-	const float NormalWeight = (1.0f - BrakeWeight) * (1.0f - BoostWeight);
+	const float SlowWeight = BrakeWeight * (1.0f - BoostWeight) * EnginePower;
+	const float NormalWeight = (1.0f - BrakeWeight) * (1.0f - BoostWeight) * EnginePower;
 
 	SlowVolume = FMath::FInterpTo(SlowVolume, SlowWeight * MasterVolume, DeltaTime, CrossfadeSpeed);
 	NormalVolume = FMath::FInterpTo(NormalVolume, NormalWeight * MasterVolume, DeltaTime, CrossfadeSpeed);

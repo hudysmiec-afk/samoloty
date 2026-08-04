@@ -5,6 +5,7 @@
 #include "JetBoostComponent.generated.h"
 
 class UJetStatsComponent;
+class UQuickReversalComponent;
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FBoostStateChangedSignature, bool, bIsBoosting);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FBoostEnergyChangedSignature, float, CurrentEnergy, float, MaxEnergy);
@@ -24,10 +25,14 @@ public:
 	void SetBoostRequested(bool bRequested);
 
 	UFUNCTION(BlueprintPure, Category="Plane|Boost")
-	bool IsBoosting() const { return bIsBoosting; }
+	bool IsBoosting() const;
 
 	UFUNCTION(BlueprintPure, Category="Plane|Boost")
-	float GetBoostAlpha() const { return BoostAlpha; }
+	float GetBoostAlpha() const;
+
+	/** One during normal operation, fading to zero while a mobility skill cuts the engine. */
+	UFUNCTION(BlueprintPure, Category="Plane|Boost")
+	float GetEnginePowerAlpha() const;
 
 	UFUNCTION(BlueprintPure, Category="Plane|Boost")
 	float GetCurrentEnergy() const { return CurrentEnergy; }
@@ -50,6 +55,7 @@ private:
 	void OnRep_IsBoosting();
 
 	void SetAuthoritativeBoostState(bool bNewBoosting);
+	void UpdatePresentationBoostState();
 	const UJetStatsComponent* GetStatsComponent() const;
 	void DrawBoostDebug(float MaxEnergy) const;
 
@@ -62,4 +68,8 @@ private:
 	bool bLocalBoostRequested = false;
 	float BoostAlpha = 0.0f;
 	float TimeSinceBoostStopped = 0.0f;
+	bool bLastPresentationBoosting = false;
+
+	UPROPERTY(Transient)
+	TObjectPtr<UQuickReversalComponent> CachedQuickReversalComponent;
 };

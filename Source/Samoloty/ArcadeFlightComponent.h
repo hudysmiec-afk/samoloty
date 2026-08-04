@@ -6,6 +6,8 @@
 
 class UJetBoostComponent;
 class UJetStatsComponent;
+class UEvasiveRollComponent;
+class UQuickReversalComponent;
 
 UENUM(BlueprintType)
 enum class EArcadeHoverState : uint8
@@ -91,6 +93,13 @@ public:
 	UFUNCTION(BlueprintPure, Category="Plane|Flight|Hover")
 	float GetHoverAlpha() const { return HoverPresentationAlpha; }
 
+	/** Weapons are allowed only in the fully restored Flying state. */
+	UFUNCTION(BlueprintPure, Category="Plane|Flight|Hover")
+	bool IsCombatFlightEnabled() const
+	{
+		return HoverState == EArcadeHoverState::Flying && !bLocalHoverEntryPending;
+	}
+
 private:
 	UFUNCTION(Server, Unreliable)
 	void ServerSetFlightInput(FVector2D Steering, float Strafe, float Brake);
@@ -139,6 +148,12 @@ private:
 	UPROPERTY(Transient)
 	TObjectPtr<UJetBoostComponent> CachedBoostComponent;
 
+	UPROPERTY(Transient)
+	TObjectPtr<UEvasiveRollComponent> CachedEvasiveRollComponent;
+
+	UPROPERTY(Transient)
+	TObjectPtr<UQuickReversalComponent> CachedQuickReversalComponent;
+
 	FVector2D RawSteering = FVector2D::ZeroVector;
 	FVector2D SmoothedSteering = FVector2D::ZeroVector;
 	float RawStrafe = 0.0f;
@@ -150,5 +165,6 @@ private:
 	float HoverPresentationAlpha = 0.0f;
 	FVector CurrentVelocity = FVector::ZeroVector;
 	float TimeSinceInputSent = 0.0f;
+	bool bLocalHoverEntryPending = false;
 	TArray<FBufferedFlightState> SnapshotBuffer;
 };

@@ -1,5 +1,6 @@
 #include "RocketProjectile.h"
 
+#include "EvasiveRollComponent.h"
 #include "HealthComponent.h"
 #include "Components/SceneComponent.h"
 #include "Components/StaticMeshComponent.h"
@@ -16,6 +17,16 @@
 #include "UObject/ConstructorHelpers.h"
 
 int32 ARocketProjectile::ServerActiveRocketCount = 0;
+
+namespace
+{
+	bool IsActorEvadingMissiles(const AActor* Actor)
+	{
+		const UEvasiveRollComponent* Roll = Actor
+			? Actor->FindComponentByClass<UEvasiveRollComponent>() : nullptr;
+		return Roll && Roll->IsEvadingMissiles();
+	}
+}
 
 ARocketProjectile::ARocketProjectile()
 {
@@ -61,6 +72,10 @@ void ARocketProjectile::InitializeRocket(const FRocketLaunchData& InLaunchData)
 	LaunchData = InLaunchData;
 	bInitialized = true;
 	ApplyLaunchState();
+	if (LaunchData.GuidanceMode == ERocketGuidanceMode::Homing)
+	{
+		UpdateHomingNetState();
+	}
 	if (HasActorBegunPlay() && !bCountedOnServer)
 	{
 		++ServerActiveRocketCount;
@@ -87,6 +102,7 @@ void ARocketProjectile::ApplyLaunchState()
 	}
 	const FVector Location = GetLocationAtDistance(DistanceTraveled);
 	const FVector Direction = GetDirectionAtDistance(DistanceTraveled);
+	CurrentHomingDirection = Direction.GetSafeNormal(SMALL_NUMBER, FVector(LaunchData.Direction));
 	SetActorLocationAndRotation(Location, Direction.Rotation(), false, nullptr,
 		ETeleportType::TeleportPhysics);
 }
@@ -189,6 +205,12 @@ FVector ARocketProjectile::GetDirectionAtDistance(const float Distance) const
 
 void ARocketProjectile::SimulateRocketMovement(const float DeltaSeconds)
 {
+	if (LaunchData.GuidanceMode == ERocketGuidanceMode::Homing)
+	{
+		SimulateHomingMovement(DeltaSeconds);
+		return;
+	}
+
 	const FVector Start = GetActorLocation();
 	const float RemainingDistance = FMath::Max(0.0f, LaunchData.MaxTravelDistance - DistanceTraveled);
 	const float StepDistance = FMath::Min(LaunchData.Speed * DeltaSeconds, RemainingDistance);
@@ -200,17 +222,21 @@ void ARocketProjectile::SimulateRocketMovement(const float DeltaSeconds)
 		FHitResult Hit;
 		if (CheckPhysicalCollision(Start, End, Hit))
 		{
-			AActor* DamageTarget = Hit.GetActor() && Hit.GetActor()->FindComponentByClass<UHealthComponent>()
-				? Hit.GetActor() : nullptr;
-			Explode(DamageTarget, Hit.ImpactPoint);
-			return;
+			if (!IsActorEvadingMissiles(Hit.GetActor()))
+			{
+				AActor* DamageTarget = Hit.GetActor()
+					&& Hit.GetActor()->FindComponentByClass<UHealthComponent>()
+					? Hit.GetActor() : nullptr;
+				Explode(DamageTarget, Hit.ImpactPoint);
+				return;
+			}
 		}
 
 		TimeSinceProximityCheck += DeltaSeconds;
 		if (TimeSinceProximityCheck >= LaunchData.ProximityCheckInterval)
 		{
 			TimeSinceProximityCheck = 0.0f;
-			if (AActor* Target = FindProximityTarget())
+			if (AActor* Target = FindProximityTarget(End))
 			{
 				Explode(Target, End);
 				return;
@@ -232,6 +258,170 @@ void ARocketProjectile::SimulateRocketMovement(const float DeltaSeconds)
 	}
 }
 
+void ARocketProjectile::SimulateHomingMovement(const float DeltaSeconds)
+{
+	const FVector Start = GetActorLocation();
+	const float RemainingDistance = FMath::Max(0.0f, LaunchData.MaxTravelDistance - DistanceTraveled);
+	const float StepDistance = FMath::Min(LaunchData.Speed * DeltaSeconds, RemainingDistance);
+	const float NewDistanceTraveled = DistanceTraveled + StepDistance;
+	const bool bFollowingLaunchCurve = LaunchData.bUseSeparationCurve
+		&& DistanceTraveled < SeparationCurveLength;
+
+	FVector MovementDirection = CurrentHomingDirection.GetSafeNormal(
+		SMALL_NUMBER, FVector(LaunchData.Direction));
+	FVector End;
+	if (bFollowingLaunchCurve)
+	{
+		End = GetLocationAtDistance(NewDistanceTraveled);
+		MovementDirection = (End - Start).GetSafeNormal(
+			SMALL_NUMBER, GetDirectionAtDistance(NewDistanceTraveled));
+	}
+	else
+	{
+		if (const AActor* Target = GetLiveHomingTarget())
+		{
+			const FVector DesiredDirection =
+				(Target->GetActorLocation() - Start).GetSafeNormal(SMALL_NUMBER, MovementDirection);
+			MovementDirection = RotateDirectionTowards(
+				MovementDirection, DesiredDirection, DeltaSeconds);
+		}
+		End = Start + MovementDirection * StepDistance;
+	}
+
+	if (HasAuthority())
+	{
+		FHitResult Hit;
+		if (CheckPhysicalCollision(Start, End, Hit))
+		{
+			if (IsActorEvadingMissiles(Hit.GetActor()))
+			{
+				BreakHomingAfterEvade(Hit.GetActor());
+			}
+			else
+			{
+				AActor* DamageTarget = Hit.GetActor()
+					&& Hit.GetActor()->FindComponentByClass<UHealthComponent>()
+					? Hit.GetActor() : nullptr;
+				Explode(DamageTarget, Hit.ImpactPoint);
+				return;
+			}
+		}
+
+		TimeSinceProximityCheck += DeltaSeconds;
+		if (TimeSinceProximityCheck >= LaunchData.ProximityCheckInterval)
+		{
+			TimeSinceProximityCheck = 0.0f;
+			if (AActor* Target = FindProximityTarget(End))
+			{
+				if (IsActorEvadingMissiles(Target))
+				{
+					BreakHomingAfterEvade(Target);
+				}
+				else
+				{
+					Explode(Target, End);
+					return;
+				}
+			}
+		}
+	}
+	else if (!bFollowingLaunchCurve && bHasHomingCorrection)
+	{
+		HomingCorrectionLocation += HomingCorrectionDirection * LaunchData.Speed * DeltaSeconds;
+		const float CorrectionAlpha = 1.0f - FMath::Exp(-8.0f * DeltaSeconds);
+		End = FMath::Lerp(End, HomingCorrectionLocation, CorrectionAlpha);
+		MovementDirection = FMath::Lerp(
+			MovementDirection, HomingCorrectionDirection, CorrectionAlpha).GetSafeNormal();
+	}
+
+	CurrentHomingDirection = MovementDirection.GetSafeNormal(
+		SMALL_NUMBER, FVector(LaunchData.Direction));
+	SetActorLocationAndRotation(End, CurrentHomingDirection.Rotation(), false, nullptr,
+		ETeleportType::None);
+	DistanceTraveled = NewDistanceTraveled;
+
+	if (LaunchData.bDrawDebug)
+	{
+		DrawDebugLine(GetWorld(), Start, End, FColor::Magenta, false, 0.15f, 0, 1.5f);
+	}
+	if (HasAuthority())
+	{
+		HomingNetUpdateAccumulator += DeltaSeconds;
+		if (HomingNetUpdateAccumulator >= 0.1f)
+		{
+			HomingNetUpdateAccumulator = 0.0f;
+			UpdateHomingNetState();
+		}
+		if (DistanceTraveled >= LaunchData.MaxTravelDistance - KINDA_SMALL_NUMBER)
+		{
+			Explode(nullptr, End);
+		}
+	}
+}
+
+FVector ARocketProjectile::RotateDirectionTowards(const FVector& CurrentDirection,
+	const FVector& DesiredDirection, const float DeltaSeconds) const
+{
+	const FVector Current = CurrentDirection.GetSafeNormal();
+	const FVector Desired = DesiredDirection.GetSafeNormal();
+	if (Current.IsNearlyZero() || Desired.IsNearlyZero())
+	{
+		return CurrentDirection;
+	}
+
+	const float AngleRadians = FMath::Acos(FMath::Clamp(
+		FVector::DotProduct(Current, Desired), -1.0f, 1.0f));
+	if (AngleRadians <= KINDA_SMALL_NUMBER)
+	{
+		return Desired;
+	}
+	const float MaxStepRadians = FMath::DegreesToRadians(
+		FMath::Max(0.0f, LaunchData.MaxTurnRateDegreesPerSecond)) * DeltaSeconds;
+	const float Alpha = FMath::Clamp(MaxStepRadians / AngleRadians, 0.0f, 1.0f);
+	const FQuat DeltaRotation = FQuat::FindBetweenNormals(Current, Desired);
+	return FQuat::Slerp(FQuat::Identity, DeltaRotation, Alpha)
+		.RotateVector(Current).GetSafeNormal();
+}
+
+void ARocketProjectile::UpdateHomingNetState()
+{
+	if (!HasAuthority() || LaunchData.GuidanceMode != ERocketGuidanceMode::Homing)
+	{
+		return;
+	}
+	HomingNetState.Location = GetActorLocation();
+	HomingNetState.Direction = CurrentHomingDirection.GetSafeNormal(
+		SMALL_NUMBER, GetActorForwardVector());
+	HomingNetState.DistanceTraveled = DistanceTraveled;
+	HomingNetState.ServerTime = GetWorld()->GetTimeSeconds();
+}
+
+void ARocketProjectile::OnRep_HomingNetState()
+{
+	if (HasAuthority() || LaunchData.GuidanceMode != ERocketGuidanceMode::Homing || !GetWorld())
+	{
+		return;
+	}
+	const AGameStateBase* GameState = GetWorld()->GetGameState();
+	const double ServerNow = GameState
+		? GameState->GetServerWorldTimeSeconds() : GetWorld()->GetTimeSeconds();
+	const float Elapsed = FMath::Max(0.0f,
+		static_cast<float>(ServerNow - HomingNetState.ServerTime));
+	HomingCorrectionDirection = FVector(HomingNetState.Direction).GetSafeNormal(
+		SMALL_NUMBER, GetActorForwardVector());
+	HomingCorrectionLocation = FVector(HomingNetState.Location)
+		+ HomingCorrectionDirection * LaunchData.Speed * Elapsed;
+	DistanceTraveled = FMath::Max(DistanceTraveled,
+		HomingNetState.DistanceTraveled + LaunchData.Speed * Elapsed);
+	bHasHomingCorrection = true;
+	if (FVector::DistSquared(GetActorLocation(), HomingCorrectionLocation) > FMath::Square(5000.0f))
+	{
+		SetActorLocationAndRotation(HomingCorrectionLocation,
+			HomingCorrectionDirection.Rotation(), false, nullptr, ETeleportType::TeleportPhysics);
+		CurrentHomingDirection = HomingCorrectionDirection;
+	}
+}
+
 bool ARocketProjectile::CheckPhysicalCollision(const FVector& Start, const FVector& End, FHitResult& OutHit) const
 {
 	FCollisionQueryParams Params(SCENE_QUERY_STAT(RocketPhysicalCollision), false, this);
@@ -241,7 +431,7 @@ bool ARocketProjectile::CheckPhysicalCollision(const FVector& Start, const FVect
 		FCollisionShape::MakeSphere(PhysicalCollisionRadius), Params);
 }
 
-AActor* ARocketProjectile::FindProximityTarget() const
+AActor* ARocketProjectile::FindProximityTarget(const FVector& QueryLocation) const
 {
 	if (LaunchData.ProximityRadius <= 0.0f)
 	{
@@ -255,8 +445,15 @@ AActor* ARocketProjectile::FindProximityTarget() const
 	Params.AddIgnoredActor(GetOwner());
 	Params.AddIgnoredActor(GetInstigator());
 
+	if (LaunchData.GuidanceMode == ERocketGuidanceMode::Homing)
+	{
+		AActor* AssignedTarget = GetLiveHomingTarget();
+		return AssignedTarget && FVector::DistSquared(QueryLocation, AssignedTarget->GetActorLocation())
+			<= FMath::Square(LaunchData.ProximityRadius) ? AssignedTarget : nullptr;
+	}
+
 	TArray<FOverlapResult> Overlaps;
-	GetWorld()->OverlapMultiByObjectType(Overlaps, GetActorLocation(), FQuat::Identity, ObjectTypes,
+	GetWorld()->OverlapMultiByObjectType(Overlaps, QueryLocation, FQuat::Identity, ObjectTypes,
 		FCollisionShape::MakeSphere(LaunchData.ProximityRadius), Params);
 
 	AActor* ClosestTarget = nullptr;
@@ -265,11 +462,11 @@ AActor* ARocketProjectile::FindProximityTarget() const
 	{
 		AActor* Candidate = Overlap.GetActor();
 		const UHealthComponent* Health = Candidate ? Candidate->FindComponentByClass<UHealthComponent>() : nullptr;
-		if (!Health || Health->IsDead())
+		if (!Health || Health->IsDead() || IsActorEvadingMissiles(Candidate))
 		{
 			continue;
 		}
-		const float DistanceSquared = FVector::DistSquared(GetActorLocation(), Candidate->GetActorLocation());
+		const float DistanceSquared = FVector::DistSquared(QueryLocation, Candidate->GetActorLocation());
 		if (DistanceSquared < ClosestDistanceSquared)
 		{
 			ClosestDistanceSquared = DistanceSquared;
@@ -279,10 +476,36 @@ AActor* ARocketProjectile::FindProximityTarget() const
 
 	if (LaunchData.bDrawDebug)
 	{
-		DrawDebugSphere(GetWorld(), GetActorLocation(), LaunchData.ProximityRadius, 16,
+		DrawDebugSphere(GetWorld(), QueryLocation, LaunchData.ProximityRadius, 16,
 			ClosestTarget ? FColor::Green : FColor::Silver, false, LaunchData.ProximityCheckInterval);
 	}
 	return ClosestTarget;
+}
+
+AActor* ARocketProjectile::GetLiveHomingTarget() const
+{
+	if (bHomingDisabled)
+	{
+		return nullptr;
+	}
+	AActor* Target = LaunchData.HomingTarget.Get();
+	const UHealthComponent* Health = Target ? Target->FindComponentByClass<UHealthComponent>() : nullptr;
+	return Health && !Health->IsDead() ? Target : nullptr;
+}
+
+void ARocketProjectile::BreakHomingAfterEvade(AActor* EvadingActor)
+{
+	if (!HasAuthority() || bHomingDisabled
+		|| LaunchData.GuidanceMode != ERocketGuidanceMode::Homing
+		|| EvadingActor != LaunchData.HomingTarget.Get())
+	{
+		return;
+	}
+
+	// Only the missile which has actually reached the protected aircraft loses
+	// guidance. Other missiles keep tracking regardless of how far away they are.
+	bHomingDisabled = true;
+	ForceNetUpdate();
 }
 
 void ARocketProjectile::Explode(AActor* DamageTarget, const FVector& ImpactLocation)
@@ -330,7 +553,10 @@ void ARocketProjectile::PlayExplosionCosmetics()
 		{
 			// Niagara sprite size is a full width/diameter. The Niagara system can
 			// multiply this gameplay radius by two when it needs an exact diameter.
-			ExplosionComponent->SetVariableFloat(TEXT("User.ExplosionRadius"), LaunchData.ProximityRadius);
+			const float VisualExplosionRadius =
+				FMath::Max(LaunchData.ProximityRadius, MinimumExplosionVisualRadius);
+			ExplosionComponent->SetVariableFloat(
+				TEXT("User.ExplosionRadius"), VisualExplosionRadius);
 			ExplosionComponent->Activate(true);
 		}
 	}
@@ -357,4 +583,6 @@ void ARocketProjectile::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& Ou
 	DOREPLIFETIME(ARocketProjectile, LaunchData);
 	DOREPLIFETIME(ARocketProjectile, bExploded);
 	DOREPLIFETIME(ARocketProjectile, ExplosionLocation);
+	DOREPLIFETIME(ARocketProjectile, HomingNetState);
+	DOREPLIFETIME(ARocketProjectile, bHomingDisabled);
 }

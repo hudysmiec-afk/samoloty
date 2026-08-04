@@ -4,24 +4,36 @@
 #include "GameFramework/HUD.h"
 #include "ArcadeFlightHUD.generated.h"
 
+class UFlightHUDWidget;
+class UHealthComponent;
+
 UCLASS()
 class SAMOLOTY_API AArcadeFlightHUD : public AHUD
 {
 	GENERATED_BODY()
 
 public:
+	AArcadeFlightHUD();
+	virtual void BeginPlay() override;
 	virtual void DrawHUD() override;
 
+private:
+	UFUNCTION()
+	void HandleDamageReceived(AActor* AttackerActor);
+
+	void UpdateHealthBinding(APawn* OwnerPawn);
+
 protected:
-	UPROPERTY(EditDefaultsOnly, Category="Crosshair")
-	FLinearColor CrosshairColor = FLinearColor(0.2f, 0.9f, 1.0f, 0.95f);
+	UPROPERTY(EditDefaultsOnly, Category="Flight HUD")
+	TSubclassOf<UFlightHUDWidget> FlightHUDWidgetClass;
 
-	UPROPERTY(EditDefaultsOnly, Category="Crosshair", meta=(ClampMin="0"))
-	float CrosshairGap = 7.0f;
+	UPROPERTY(Transient)
+	TObjectPtr<UFlightHUDWidget> FlightHUDWidget;
 
-	UPROPERTY(EditDefaultsOnly, Category="Crosshair", meta=(ClampMin="1"))
-	float CrosshairLineLength = 10.0f;
+	UPROPERTY(EditDefaultsOnly, Category="Flight HUD|Targeting",
+		meta=(ClampMin="0.1", Units="s"))
+	float AttackerIndicatorDuration = 3.0f;
 
-	UPROPERTY(EditDefaultsOnly, Category="Crosshair", meta=(ClampMin="0.5"))
-	float CrosshairThickness = 1.5f;
+	TWeakObjectPtr<UHealthComponent> BoundHealthComponent;
+	TMap<TWeakObjectPtr<AActor>, double> RecentAttackersUntil;
 };

@@ -1,7 +1,11 @@
 #include "HealthComponent.h"
 
+#include "EvasiveRollComponent.h"
 #include "JetStatsComponent.h"
+#include "RocketProjectile.h"
 #include "GameFramework/Actor.h"
+#include "GameFramework/Controller.h"
+#include "GameFramework/Pawn.h"
 #include "Net/UnrealNetwork.h"
 
 UHealthComponent::UHealthComponent()
@@ -33,14 +37,44 @@ void UHealthComponent::HandleAnyDamage(AActor* DamagedActor, const float Damage,
 	{
 		return;
 	}
+	if (Cast<ARocketProjectile>(DamageCauser))
+	{
+		const UEvasiveRollComponent* Roll =
+			GetOwner()->FindComponentByClass<UEvasiveRollComponent>();
+		if (Roll && Roll->IsEvadingMissiles())
+		{
+			return;
+		}
+	}
 
 	CurrentHealth = FMath::Max(0.0f, CurrentHealth - Damage);
 	OnHealthChanged.Broadcast(CurrentHealth, GetMaxHealth());
+	AActor* AttackerActor = InstigatedBy ? InstigatedBy->GetPawn() : nullptr;
+	if (!AttackerActor && DamageCauser)
+	{
+		AttackerActor = DamageCauser->GetInstigator();
+		if (!AttackerActor)
+		{
+			AttackerActor = DamageCauser->GetOwner();
+		}
+	}
+	if (AttackerActor && AttackerActor != GetOwner())
+	{
+		ClientNotifyDamageReceived(AttackerActor);
+	}
 	if (CurrentHealth <= KINDA_SMALL_NUMBER)
 	{
 		bIsDead = true;
 		OnHealthDepleted.Broadcast();
 		GetOwner()->Destroy();
+	}
+}
+
+void UHealthComponent::ClientNotifyDamageReceived_Implementation(AActor* AttackerActor)
+{
+	if (IsValid(AttackerActor))
+	{
+		OnDamageReceived.Broadcast(AttackerActor);
 	}
 }
 

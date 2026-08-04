@@ -1,5 +1,8 @@
 #include "PlaneWeaponComponent.h"
 
+#include "QuickReversalComponent.h"
+#include "GameFramework/Actor.h"
+
 UPlaneWeaponComponent::UPlaneWeaponComponent()
 {
 	SetIsReplicatedByDefault(true);
@@ -17,6 +20,10 @@ void UPlaneWeaponComponent::SetFirePoints(USceneComponent* LeftPoint, USceneComp
 {
 }
 
+void UPlaneWeaponComponent::RejectCurrentTarget()
+{
+}
+
 void UPlaneWeaponComponent::SetWeaponEquipped(const bool bEquipped)
 {
 	if (bWeaponEquipped == bEquipped)
@@ -29,4 +36,11 @@ void UPlaneWeaponComponent::SetWeaponEquipped(const bool bEquipped)
 
 void UPlaneWeaponComponent::OnWeaponEquippedChanged()
 {
+}
+
+bool UPlaneWeaponComponent::IsOwnerFireBlocked() const
+{
+	const UQuickReversalComponent* Reversal = GetOwner()
+		? GetOwner()->FindComponentByClass<UQuickReversalComponent>() : nullptr;
+	return Reversal && Reversal->IsWeaponFireBlocked();
 }

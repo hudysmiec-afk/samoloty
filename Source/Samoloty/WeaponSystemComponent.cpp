@@ -1,5 +1,6 @@
 #include "WeaponSystemComponent.h"
 
+#include "ArcadeFlightComponent.h"
 #include "Components/SceneComponent.h"
 #include "Engine/Engine.h"
 #include "GameFramework/Pawn.h"
@@ -75,6 +76,12 @@ void UWeaponSystemComponent::SetFireHeld(const EWeaponSlot Slot, const bool bHel
 	{
 		return;
 	}
+	const UArcadeFlightComponent* Flight = GetOwner()
+		? GetOwner()->FindComponentByClass<UArcadeFlightComponent>() : nullptr;
+	if (bHeld && Flight && !Flight->IsCombatFlightEnabled())
+	{
+		return;
+	}
 	if (UPlaneWeaponComponent* Weapon = GetActiveWeapon(Slot))
 	{
 		Weapon->SetFireHeld(bHeld);
@@ -97,6 +104,18 @@ void UWeaponSystemComponent::CycleWeapon(const EWeaponSlot Slot)
 	else
 	{
 		ServerCycleWeapon(Slot);
+	}
+}
+
+void UWeaponSystemComponent::RejectCurrentTarget(const EWeaponSlot Slot)
+{
+	if (!IsValidWeaponSlot(Slot))
+	{
+		return;
+	}
+	if (UPlaneWeaponComponent* Weapon = GetActiveWeapon(Slot))
+	{
+		Weapon->RejectCurrentTarget();
 	}
 }
 

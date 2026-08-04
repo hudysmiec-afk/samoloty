@@ -2,6 +2,7 @@
 
 #include "ArcadeFlightComponent.h"
 #include "JetStatsComponent.h"
+#include "QuickReversalComponent.h"
 #include "Engine/Engine.h"
 #include "GameFramework/Actor.h"
 #include "GameFramework/Pawn.h"
@@ -21,6 +22,8 @@ void UJetBoostComponent::BeginPlay()
 	{
 		CurrentEnergy = Stats->GetFlightStats().MaxBoostEnergy;
 	}
+	CachedQuickReversalComponent = GetOwner()
+		? GetOwner()->FindComponentByClass<UQuickReversalComponent>() : nullptr;
 }
 
 void UJetBoostComponent::TickComponent(const float DeltaTime, const ELevelTick TickType,
@@ -36,7 +39,10 @@ void UJetBoostComponent::TickComponent(const float DeltaTime, const ELevelTick T
 	const FJetFlightStats& Values = Stats->GetFlightStats();
 	if (GetOwner()->HasAuthority())
 	{
-		const bool bCanBoost = bLocalBoostRequested && CurrentEnergy > KINDA_SMALL_NUMBER;
+		const bool bMobilityOverride = CachedQuickReversalComponent
+			&& CachedQuickReversalComponent->IsReversalActive();
+		const bool bCanBoost = !bMobilityOverride
+			&& bLocalBoostRequested && CurrentEnergy > KINDA_SMALL_NUMBER;
 		SetAuthoritativeBoostState(bCanBoost);
 
 		if (bIsBoosting)
@@ -63,7 +69,44 @@ void UJetBoostComponent::TickComponent(const float DeltaTime, const ELevelTick T
 	// state but never keep boosting only because Space is still held locally.
 	BoostAlpha = FMath::FInterpTo(BoostAlpha, bIsBoosting ? 1.0f : 0.0f,
 		DeltaTime, Values.BoostResponseSpeed);
+	UpdatePresentationBoostState();
 	DrawBoostDebug(Values.MaxBoostEnergy);
+}
+
+bool UJetBoostComponent::IsBoosting() const
+{
+	if (CachedQuickReversalComponent
+		&& CachedQuickReversalComponent->IsReversalActive())
+	{
+		return CachedQuickReversalComponent->GetSkillBoostAlpha() > 0.01f;
+	}
+	return bIsBoosting;
+}
+
+float UJetBoostComponent::GetBoostAlpha() const
+{
+	if (CachedQuickReversalComponent
+		&& CachedQuickReversalComponent->IsReversalActive())
+	{
+		return CachedQuickReversalComponent->GetSkillBoostAlpha();
+	}
+	return BoostAlpha;
+}
+
+float UJetBoostComponent::GetEnginePowerAlpha() const
+{
+	return CachedQuickReversalComponent
+		? 1.0f - CachedQuickReversalComponent->GetEngineCutAlpha() : 1.0f;
+}
+
+void UJetBoostComponent::UpdatePresentationBoostState()
+{
+	const bool bPresentationBoosting = IsBoosting();
+	if (bLastPresentationBoosting != bPresentationBoosting)
+	{
+		bLastPresentationBoosting = bPresentationBoosting;
+		OnBoostStateChanged.Broadcast(bPresentationBoosting);
+	}
 }
 
 void UJetBoostComponent::DrawBoostDebug(const float MaxEnergy) const
@@ -133,13 +176,13 @@ void UJetBoostComponent::SetAuthoritativeBoostState(const bool bNewBoosting)
 	if (bIsBoosting != bNewBoosting)
 	{
 		bIsBoosting = bNewBoosting;
-		OnBoostStateChanged.Broadcast(bIsBoosting);
+		UpdatePresentationBoostState();
 	}
 }
 
 void UJetBoostComponent::OnRep_IsBoosting()
 {
-	OnBoostStateChanged.Broadcast(bIsBoosting);
+	UpdatePresentationBoostState();
 }
 
 const UJetStatsComponent* UJetBoostComponent::GetStatsComponent() const

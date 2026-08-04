@@ -9,6 +9,7 @@ class UJetStatsComponent;
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FHealthChangedSignature, float, CurrentHealth, float, MaxHealth);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE(FHealthDepletedSignature);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FDamageReceivedSignature, AActor*, AttackerActor);
 
 UCLASS(ClassGroup=(Plane), meta=(BlueprintSpawnableComponent))
 class SAMOLOTY_API UHealthComponent : public UActorComponent
@@ -35,6 +36,10 @@ public:
 	UPROPERTY(BlueprintAssignable, Category="Plane|Health")
 	FHealthDepletedSignature OnHealthDepleted;
 
+	/** Delivered to the owning client so local HUD can show the attacker direction. */
+	UPROPERTY(BlueprintAssignable, Category="Plane|Health")
+	FDamageReceivedSignature OnDamageReceived;
+
 private:
 	UFUNCTION()
 	void HandleAnyDamage(AActor* DamagedActor, float Damage, const UDamageType* DamageType,
@@ -45,6 +50,9 @@ private:
 
 	UFUNCTION()
 	void OnRep_IsDead();
+
+	UFUNCTION(Client, Unreliable)
+	void ClientNotifyDamageReceived(AActor* AttackerActor);
 
 	const UJetStatsComponent* GetStatsComponent() const;
 

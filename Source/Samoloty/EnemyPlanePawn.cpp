@@ -20,8 +20,7 @@ AEnemyPlanePawn::AEnemyPlanePawn()
 
 	Collision = CreateDefaultSubobject<UBoxComponent>(TEXT("Collision"));
 	Collision->InitBoxExtent(FVector(240.0f, 110.0f, 60.0f));
-	Collision->SetCollisionProfileName(UCollisionProfile::Pawn_ProfileName);
-	Collision->SetCollisionResponseToChannel(ECC_Visibility, ECR_Block);
+	Collision->SetCollisionProfileName(FName(TEXT("PlanePawn")));
 	RootComponent = Collision;
 
 	PlaneMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("PlaneMesh"));

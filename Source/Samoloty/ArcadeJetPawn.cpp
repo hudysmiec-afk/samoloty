@@ -1,12 +1,19 @@
 #include "ArcadeJetPawn.h"
 
 #include "ArcadeFlightComponent.h"
+#include "EvasiveRollComponent.h"
 #include "HealthComponent.h"
+#include "HomingMissileWeaponComponent.h"
 #include "JetBoostComponent.h"
 #include "JetEngineAudioComponent.h"
 #include "JetStatsComponent.h"
+#include "MissileTargetingComponent.h"
+#include "QuickReversalComponent.h"
+#include "RadarComponent.h"
 #include "RocketWeaponComponent.h"
 #include "RifleGunComponent.h"
+#include "ShotgunGunComponent.h"
+#include "TargetSelectionComponent.h"
 #include "WeaponSystemComponent.h"
 #include "Camera/CameraComponent.h"
 #include "Components/BoxComponent.h"
@@ -30,6 +37,19 @@ namespace ArcadeJetCameraTuning
 	constexpr float BoostFollowResponse = 4.0f;
 	constexpr float HoverFollowResponse = 8.0f;
 	constexpr float TeleportSnapDistance = 12000.0f;
+	constexpr float ReversalCameraDelayFraction = 0.55f;
+	constexpr float ReversalCameraRecoveryStart = 0.82f;
+	constexpr float ReversalCameraLookAcquireEnd = 0.28f;
+	constexpr float ReversalCameraPullBack = 450.0f;
+	constexpr float ReversalCameraLift = 170.0f;
+}
+
+namespace ArcadeJetPresentationTuning
+{
+	// The roll axis sits slightly above the aircraft rather than passing through
+	// the mesh center. A small radius keeps the maneuver readable without throwing
+	// the plane several meters across the screen.
+	constexpr float EvasiveRollPivotHeight = 200.0f;
 }
 
 AArcadeJetPawn::AArcadeJetPawn()
@@ -45,13 +65,19 @@ AArcadeJetPawn::AArcadeJetPawn()
 	VirtualFlightRoot = CreateDefaultSubobject<USceneComponent>(TEXT("VirtualFlightRoot"));
 	RootComponent = VirtualFlightRoot;
 
+	EvasiveRollPivot = CreateDefaultSubobject<USceneComponent>(TEXT("EvasiveRollPivot"));
+	EvasiveRollPivot->SetupAttachment(VirtualFlightRoot);
+	EvasiveRollPivot->SetRelativeLocation(
+		FVector(0.0f, 0.0f, ArcadeJetPresentationTuning::EvasiveRollPivotHeight));
+
 	VisualRoot = CreateDefaultSubobject<USceneComponent>(TEXT("VisualRoot"));
-	VisualRoot->SetupAttachment(VirtualFlightRoot);
+	VisualRoot->SetupAttachment(EvasiveRollPivot);
+	VisualRoot->SetRelativeLocation(
+		FVector(0.0f, 0.0f, -ArcadeJetPresentationTuning::EvasiveRollPivotHeight));
 
 	Collision = CreateDefaultSubobject<UBoxComponent>(TEXT("Collision"));
 	Collision->InitBoxExtent(FVector(240.0f, 110.0f, 60.0f));
-	Collision->SetCollisionProfileName(UCollisionProfile::Pawn_ProfileName);
-	Collision->SetCollisionResponseToChannel(ECC_Visibility, ECR_Block);
+	Collision->SetCollisionProfileName(FName(TEXT("PlanePawn")));
 	Collision->SetupAttachment(VisualRoot);
 
 	PlaneMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("PlaneMesh"));
@@ -62,9 +88,16 @@ AArcadeJetPawn::AArcadeJetPawn()
 	Health = CreateDefaultSubobject<UHealthComponent>(TEXT("Health"));
 	JetBoost = CreateDefaultSubobject<UJetBoostComponent>(TEXT("JetBoost"));
 	JetEngineAudio = CreateDefaultSubobject<UJetEngineAudioComponent>(TEXT("JetEngineAudio"));
+	EvasiveRoll = CreateDefaultSubobject<UEvasiveRollComponent>(TEXT("EvasiveRoll"));
+	QuickReversal = CreateDefaultSubobject<UQuickReversalComponent>(TEXT("QuickReversal"));
 	FlightMovement = CreateDefaultSubobject<UArcadeFlightComponent>(TEXT("FlightMovement"));
 	RocketWeapon = CreateDefaultSubobject<URocketWeaponComponent>(TEXT("RocketWeapon"));
+	Radar = CreateDefaultSubobject<URadarComponent>(TEXT("Radar"));
+	TargetSelection = CreateDefaultSubobject<UTargetSelectionComponent>(TEXT("TargetSelection"));
+	MissileTargeting = CreateDefaultSubobject<UMissileTargetingComponent>(TEXT("MissileTargeting"));
+	HomingMissileWeapon = CreateDefaultSubobject<UHomingMissileWeaponComponent>(TEXT("RocketWeaponHoming"));
 	RifleGun = CreateDefaultSubobject<URifleGunComponent>(TEXT("RifleGun"));
+	ShotgunGun = CreateDefaultSubobject<UShotgunGunComponent>(TEXT("ShotgunGun"));
 	WeaponSystem = CreateDefaultSubobject<UWeaponSystemComponent>(TEXT("WeaponSystem"));
 
 	RocketSpawnLeft = CreateDefaultSubobject<USceneComponent>(TEXT("RocketSpawnLeft"));
@@ -104,7 +137,12 @@ void AArcadeJetPawn::BeginPlay()
 	Super::BeginPlay();
 	WeaponSystem->ConfigureFirePoints(EWeaponSlot::Gun, GunMuzzleLeft, GunMuzzleRight);
 	WeaponSystem->ConfigureFirePoints(EWeaponSlot::Missile, RocketSpawnLeft, RocketSpawnRight);
-	VisualRoot->SetRelativeLocationAndRotation(FVector::ZeroVector, FRotator::ZeroRotator);
+	EvasiveRollPivot->SetRelativeLocationAndRotation(
+		FVector(0.0f, 0.0f, ArcadeJetPresentationTuning::EvasiveRollPivotHeight),
+		FRotator::ZeroRotator);
+	VisualRoot->SetRelativeLocationAndRotation(
+		FVector(0.0f, 0.0f, -ArcadeJetPresentationTuning::EvasiveRollPivotHeight),
+		FRotator::ZeroRotator);
 	CameraBoom->SetAbsolute(true, true, false);
 	CameraBoom->TargetArmLength = 0.0f;
 	CameraBoom->SocketOffset = FVector::ZeroVector;
@@ -140,11 +178,38 @@ void AArcadeJetPawn::BeginPlay()
 
 void AArcadeJetPawn::SetVisualBank(const float BankDegrees)
 {
-	if (!VisualRoot)
+	CurrentVisualBankDegrees = BankDegrees;
+	ApplyVisualRotation();
+}
+
+void AArcadeJetPawn::SetEvasiveRollPresentation(const bool bActive, const float RollDegrees)
+{
+	if (EvasiveRollPivot)
 	{
-		return;
+		EvasiveRollPivot->SetRelativeRotation(
+			FRotator(0.0f, 0.0f, bActive ? RollDegrees : 0.0f));
 	}
-	VisualRoot->SetRelativeRotation(FRotator(0.0f, 0.0f, BankDegrees));
+}
+
+void AArcadeJetPawn::ApplyVisualRotation()
+{
+	if (VisualRoot)
+	{
+		const bool bMobilityPresentation = QuickReversal
+			&& QuickReversal->IsReversalActive();
+		const FQuat MobilityRotation = bMobilityPresentation
+			? QuickReversal->GetPresentationRelativeRotation(GetActorQuat())
+			: FQuat::Identity;
+		const float FlightBankBlend = bMobilityPresentation
+			? QuickReversal->GetFlightBankBlendAlpha() : 1.0f;
+		const float FlightBankDegrees = CurrentVisualBankDegrees * FlightBankBlend;
+		const FQuat FlightBankRotation(
+			FVector::ForwardVector, FMath::DegreesToRadians(FlightBankDegrees));
+		VisualRoot->SetRelativeLocation(
+			FVector(0.0f, 0.0f, -ArcadeJetPresentationTuning::EvasiveRollPivotHeight));
+		VisualRoot->SetRelativeRotation(
+			(MobilityRotation * FlightBankRotation).GetNormalized());
+	}
 }
 
 FVector AArcadeJetPawn::MovePlaneWithCollision(const FVector& RequestedMove)
@@ -188,6 +253,12 @@ void AArcadeJetPawn::SetupPlayerInputComponent(UInputComponent* PlayerInputCompo
 	Super::SetupPlayerInputComponent(PlayerInputComponent);
 	check(PlayerInputComponent);
 	PlayerInputComponent->BindAxis(TEXT("PlaneStrafe"), this, &AArcadeJetPawn::SetStrafe);
+	PlayerInputComponent->BindAction(TEXT("PlaneEvasiveRollLeftTap"), IE_Pressed,
+		this, &AArcadeJetPawn::RegisterLeftRollTap);
+	PlayerInputComponent->BindAction(TEXT("PlaneEvasiveRollRightTap"), IE_Pressed,
+		this, &AArcadeJetPawn::RegisterRightRollTap);
+	PlayerInputComponent->BindAction(TEXT("PlaneQuickReversal"), IE_Pressed,
+		this, &AArcadeJetPawn::ActivateQuickReversal);
 	PlayerInputComponent->BindAxis(TEXT("PlaneBrake"), this, &AArcadeJetPawn::SetBrake);
 	PlayerInputComponent->BindAxis(TEXT("PlaneHoverZoom"), this, &AArcadeJetPawn::SetHoverCameraZoom);
 	PlayerInputComponent->BindAxis(TEXT("PlaneMouseX"), this, &AArcadeJetPawn::AddHoverCameraYawInput);
@@ -203,6 +274,8 @@ void AArcadeJetPawn::SetupPlayerInputComponent(UInputComponent* PlayerInputCompo
 		this, &AArcadeJetPawn::CycleGunWeapon);
 	PlayerInputComponent->BindAction(TEXT("PlaneCycleMissileWeapon"), IE_Pressed,
 		this, &AArcadeJetPawn::CycleMissileWeapon);
+	PlayerInputComponent->BindAction(TEXT("PlaneRejectMissileTarget"), IE_Pressed,
+		this, &AArcadeJetPawn::RejectMissileTarget);
 }
 
 void AArcadeJetPawn::Tick(const float DeltaSeconds)
@@ -215,6 +288,9 @@ void AArcadeJetPawn::Tick(const float DeltaSeconds)
 			EndHoverCameraOrbit();
 		}
 		UpdateCursorInput();
+		// Steering and lateral movement remain continuous through the roll. Double
+		// taps are detected by separate key actions, so they do not require cutting
+		// the existing strafe velocity.
 		FlightMovement->SetLocalFlightInput(CursorSteering, StrafeInput, BrakeInput);
 	}
 }
@@ -222,6 +298,23 @@ void AArcadeJetPawn::Tick(const float DeltaSeconds)
 void AArcadeJetPawn::SetStrafe(const float Value)
 {
 	StrafeInput = FMath::Clamp(Value, -1.0f, 1.0f);
+}
+
+void AArcadeJetPawn::RegisterLeftRollTap()
+{
+	EvasiveRoll->RegisterStrafeTap(EEvasiveRollDirection::Left);
+}
+
+void AArcadeJetPawn::RegisterRightRollTap()
+{
+	EvasiveRoll->RegisterStrafeTap(EEvasiveRollDirection::Right);
+}
+
+void AArcadeJetPawn::ActivateQuickReversal()
+{
+	const float PreferredDirection = FMath::Abs(CursorSteering.X) > 0.05f
+		? CursorSteering.X : StrafeInput;
+	QuickReversal->RequestActivation(PreferredDirection);
 }
 
 void AArcadeJetPawn::SetBrake(const float Value)
@@ -244,6 +337,10 @@ void AArcadeJetPawn::StopBoost()
 void AArcadeJetPawn::ToggleHover()
 {
 	EndHoverCameraOrbit();
+	// Stop held triggers before requesting the transition. Server-side weapon
+	// checks provide the authoritative equivalent.
+	WeaponSystem->SetFireHeld(EWeaponSlot::Gun, false);
+	WeaponSystem->SetFireHeld(EWeaponSlot::Missile, false);
 	HoverCameraOrbitYaw = 0.0f;
 	HoverCameraOrbitPitch = 0.0f;
 	FlightMovement->ToggleHover();
@@ -328,6 +425,10 @@ void AArcadeJetPawn::StartMissileFire()
 		BeginHoverCameraOrbit();
 		return;
 	}
+	if (!FlightMovement->IsCombatFlightEnabled())
+	{
+		return;
+	}
 	WeaponSystem->SetFireHeld(EWeaponSlot::Missile, true);
 }
 
@@ -339,6 +440,10 @@ void AArcadeJetPawn::StopMissileFire()
 
 void AArcadeJetPawn::StartGunFire()
 {
+	if (!FlightMovement->IsCombatFlightEnabled())
+	{
+		return;
+	}
 	WeaponSystem->SetFireHeld(EWeaponSlot::Gun, true);
 }
 
@@ -355,6 +460,11 @@ void AArcadeJetPawn::CycleGunWeapon()
 void AArcadeJetPawn::CycleMissileWeapon()
 {
 	WeaponSystem->CycleWeapon(EWeaponSlot::Missile);
+}
+
+void AArcadeJetPawn::RejectMissileTarget()
+{
+	TargetSelection->CycleSelectedTarget();
 }
 
 void AArcadeJetPawn::UpdateCursorInput()
@@ -428,7 +538,96 @@ void AArcadeJetPawn::UpdateCameraAfterFlight(const float DeltaSeconds)
 		FlightFollowResponse,
 		ArcadeJetCameraTuning::HoverFollowResponse,
 		HoverAlpha);
-	if (FVector::DistSquared(CurrentCameraWorldPosition, DesiredEye)
+	const bool bQuickReversalActive = QuickReversal
+		&& QuickReversal->IsReversalActive();
+	if (bQuickReversalActive)
+	{
+		// Mobility maneuvers use their own camera path. The path turns later than the
+		// aircraft and looks back at it, instead of attaching the camera to its forward
+		// vector. This keeps the fast reversal readable and avoids a rigid 180-degree
+		// camera whip.
+		if (!bQuickReversalCameraPathActive)
+		{
+			QuickReversalCameraStartOffset = CurrentCameraWorldPosition - PlaneLocation;
+			QuickReversalCameraStartPlaneLocation = PlaneLocation;
+			const FQuat StartCameraRotation = CurrentCameraWorldRotation.Quaternion();
+			QuickReversalCameraStartViewDirection =
+				StartCameraRotation.GetForwardVector().GetSafeNormal();
+			QuickReversalCameraStartUp =
+				StartCameraRotation.GetUpVector().GetSafeNormal();
+			if (QuickReversalCameraStartOffset.IsNearlyZero())
+			{
+				QuickReversalCameraStartOffset = DesiredFlightEye - PlaneLocation;
+			}
+			bQuickReversalCameraPathActive = true;
+		}
+
+		const float ManeuverProgress = QuickReversal->GetManeuverProgress();
+		const float RawCameraProgress = static_cast<float>(
+			FMath::GetMappedRangeValueClamped(
+				FVector2D(ArcadeJetCameraTuning::ReversalCameraDelayFraction, 1.0),
+				FVector2D(0.0, 1.0), static_cast<double>(ManeuverProgress)));
+		const float CameraProgress = FMath::SmoothStep(0.0f, 1.0f, RawCameraProgress);
+		const float RawRecoveryAlpha = static_cast<float>(
+			FMath::GetMappedRangeValueClamped(
+				FVector2D(ArcadeJetCameraTuning::ReversalCameraRecoveryStart, 1.0),
+				FVector2D(0.0, 1.0), static_cast<double>(ManeuverProgress)));
+		const float RecoveryAlpha = FMath::SmoothStep(0.0f, 1.0f, RawRecoveryAlpha);
+		const float ArcAlpha = FMath::Sin(UE_PI * ManeuverProgress);
+		const float OrbitDegrees = QuickReversal->GetDirectionSign()
+			* 180.0f * CameraProgress;
+
+		const FVector ManeuverUp = QuickReversal->GetManeuverUpAxis();
+		const float AxialOffset = FVector::DotProduct(
+			QuickReversalCameraStartOffset, ManeuverUp);
+		FVector RadialOffset = QuickReversalCameraStartOffset
+			- ManeuverUp * AxialOffset;
+		const float StartRadius = RadialOffset.Size();
+		if (RadialOffset.IsNearlyZero())
+		{
+			RadialOffset = -FlightForward;
+		}
+		RadialOffset = RadialOffset.GetSafeNormal()
+			.RotateAngleAxis(OrbitDegrees, ManeuverUp)
+			* (StartRadius + ArcadeJetCameraTuning::ReversalCameraPullBack * ArcAlpha);
+		// Keep the path centered at the activation point. During the first phase the
+		// plane moves away while facing the camera, then flies back toward it before
+		// the delayed camera orbit catches up.
+		const FVector PatternEye = QuickReversalCameraStartPlaneLocation + RadialOffset
+			+ ManeuverUp * (
+				AxialOffset
+				+ ArcadeJetCameraTuning::ReversalCameraLift * ArcAlpha);
+		CurrentCameraWorldPosition = FMath::Lerp(
+			PatternEye, DesiredFlightEye, RecoveryAlpha);
+
+		const float LookAcquireAlpha = FMath::SmoothStep(
+			0.0f, ArcadeJetCameraTuning::ReversalCameraLookAcquireEnd,
+			ManeuverProgress);
+		const FVector PlaneViewDirection =
+			(PlaneLocation - CurrentCameraWorldPosition).GetSafeNormal();
+		const FVector TrackingViewDirection = FMath::Lerp(
+			QuickReversalCameraStartViewDirection,
+			PlaneViewDirection,
+			LookAcquireAlpha).GetSafeNormal();
+		const FVector FlightViewDirection =
+			(FlightLookTarget - CurrentCameraWorldPosition).GetSafeNormal();
+		const FVector PatternViewDirection = FMath::Lerp(
+			TrackingViewDirection,
+			FlightViewDirection,
+			RecoveryAlpha).GetSafeNormal();
+		const FVector TrackingUp = FMath::Lerp(
+			QuickReversalCameraStartUp,
+			ManeuverUp,
+			LookAcquireAlpha).GetSafeNormal();
+		const FVector PatternUp = FMath::Lerp(
+			TrackingUp, FlightUp, RecoveryAlpha).GetSafeNormal();
+		if (!PatternViewDirection.IsNearlyZero())
+		{
+			CurrentCameraWorldRotation = FRotationMatrix::MakeFromXZ(
+				PatternViewDirection, PatternUp).Rotator();
+		}
+	}
+	else if (FVector::DistSquared(CurrentCameraWorldPosition, DesiredEye)
 			> FMath::Square(ArcadeJetCameraTuning::TeleportSnapDistance))
 	{
 		CurrentCameraWorldPosition = DesiredEye;
@@ -437,6 +636,10 @@ void AArcadeJetPawn::UpdateCameraAfterFlight(const float DeltaSeconds)
 	{
 		CurrentCameraWorldPosition = FMath::VInterpTo(
 			CurrentCameraWorldPosition, DesiredEye, DeltaSeconds, FollowResponse);
+	}
+	if (!bQuickReversalActive)
+	{
+		bQuickReversalCameraPathActive = false;
 	}
 
 	// Blend normalized view directions rather than distant target positions. This
@@ -452,7 +655,7 @@ void AArcadeJetPawn::UpdateCameraAfterFlight(const float DeltaSeconds)
 	const FVector FlightUpForBlend = bUseFlightCamera ? FlightUp : FVector::UpVector;
 	const FVector CameraUp = FMath::Lerp(
 		FlightUpForBlend, FVector::UpVector, HoverAlpha).GetSafeNormal();
-	if (!ViewDirection.IsNearlyZero())
+	if (!bQuickReversalActive && !ViewDirection.IsNearlyZero())
 	{
 		CurrentCameraWorldRotation = FRotationMatrix::MakeFromXZ(
 			ViewDirection.GetSafeNormal(), CameraUp).Rotator();
