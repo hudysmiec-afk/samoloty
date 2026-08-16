@@ -48,7 +48,7 @@ struct FJetFlightStats
 
 	/** Turn-rate multiplier at MinForwardSpeed. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Flight|Turning", meta=(ClampMin="0.1", ClampMax="3"))
-	float MinSpeedTurnMultiplier = 1.25f;
+	float MinSpeedTurnMultiplier = 1.10f;
 
 	/** Turn-rate multiplier at full boost speed. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Flight|Turning", meta=(ClampMin="0.1", ClampMax="1"))

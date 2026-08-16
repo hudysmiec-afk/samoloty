@@ -149,6 +149,9 @@ private:
 	UFUNCTION()
 	void OnRep_HomingNetState();
 
+	UFUNCTION()
+	void OnRep_HomingDisabled();
+
 	void ApplyLaunchState();
 	void SimulateRocketMovement(float DeltaSeconds);
 	void SimulateHomingMovement(float DeltaSeconds);
@@ -161,6 +164,8 @@ private:
 	bool CheckPhysicalCollision(const FVector& Start, const FVector& End, FHitResult& OutHit) const;
 	AActor* FindProximityTarget(const FVector& QueryLocation) const;
 	AActor* GetLiveHomingTarget() const;
+	void RefreshMissileWarningRegistration();
+	void ClearMissileWarningRegistration();
 	void BreakHomingAfterEvade(AActor* EvadingActor);
 	FVector RotateDirectionTowards(const FVector& CurrentDirection,
 		const FVector& DesiredDirection, float DeltaSeconds) const;
@@ -180,8 +185,10 @@ private:
 	FHomingMissileNetState HomingNetState;
 
 	/** Set only when this missile actually reaches an evading target during its roll. */
-	UPROPERTY(Replicated)
+	UPROPERTY(ReplicatedUsing=OnRep_HomingDisabled)
 	bool bHomingDisabled = false;
+
+	TWeakObjectPtr<AActor> RegisteredWarningTarget;
 
 	float DistanceTraveled = 0.0f;
 	float TimeSinceProximityCheck = 0.0f;

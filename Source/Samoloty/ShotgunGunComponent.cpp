@@ -2,6 +2,7 @@
 
 #include "ArcadeFlightComponent.h"
 #include "HealthComponent.h"
+#include "GunAimAssistComponent.h"
 #include "JetStatsComponent.h"
 #include "RifleTracerVisual.h"
 #include "Components/SceneComponent.h"
@@ -160,7 +161,11 @@ void UShotgunGunComponent::FirePredictedBlast()
 	const int32 ShotSequence = LocalShotSequence++;
 	const uint8 MuzzleIndex = static_cast<uint8>(ShotSequence & 1);
 	BuildPelletPaths(false, ShotgunTuning::SeedOffset + ShotSequence, PelletEnds, HitFlags);
-	PlayBlastVisual(PelletEnds, HitFlags, MuzzleIndex);
+	// Keep the weapon responsive, but never predict pellet impacts. Those are shown
+	// only after the server confirms its authoritative traces.
+	TArray<uint8> NoPredictedHits;
+	NoPredictedHits.Init(0, PelletEnds.Num());
+	PlayBlastVisual(PelletEnds, NoPredictedHits, MuzzleIndex);
 }
 
 void UShotgunGunComponent::FireAuthoritativeBlast()
@@ -198,9 +203,19 @@ int32 UShotgunGunComponent::BuildPelletPaths(const bool bApplyDamage, const int3
 	const FVector AimOrigin = bUseCameraAim
 		? (bApplyDamage ? ServerCameraOrigin : LocalCameraOrigin)
 		: GetOwner()->GetActorLocation();
-	const FVector AimDirection = bUseCameraAim
+	FVector AimDirection = bUseCameraAim
 		? (bApplyDamage ? ServerCameraDirection : LocalCameraDirection).GetSafeNormal()
 		: GetOwner()->GetActorForwardVector();
+	if (const UGunAimAssistComponent* AimAssist =
+		GetOwner()->FindComponentByClass<UGunAimAssistComponent>())
+	{
+		FVector AssistedAimPoint;
+		if (AimAssist->FindAssistedAimPoint(
+			AimOrigin, AimDirection, Stats.MaxRange, AssistedAimPoint))
+		{
+			AimDirection = (AssistedAimPoint - AimOrigin).GetSafeNormal();
+		}
+	}
 	const float SpreadRadians = FMath::DegreesToRadians(Stats.SpreadAngleDegrees);
 	FRandomStream RandomStream(ShotSeed);
 	FCollisionQueryParams QueryParams(SCENE_QUERY_STAT(ShotgunTrace), true, GetOwner());
@@ -264,6 +279,9 @@ void UShotgunGunComponent::MulticastPlayBlast_Implementation(
 	const APawn* Pawn = Cast<APawn>(GetOwner());
 	if (Pawn && Pawn->IsLocallyControlled())
 	{
+		// Local tracers, muzzle flash and fire audio have already been predicted.
+		// Only add authoritative pellet impacts to avoid duplicate shot cosmetics.
+		PlayBlastImpacts(PelletEnds, HitFlags, MuzzleIndex);
 		return;
 	}
 	PlayBlastVisual(PelletEnds, HitFlags, MuzzleIndex);
@@ -336,6 +354,38 @@ void UShotgunGunComponent::PlayBlastVisual(const TArray<FVector_NetQuantize>& Pe
 	}
 }
 
+void UShotgunGunComponent::PlayBlastImpacts(
+	const TArray<FVector_NetQuantize>& PelletEnds,
+	const TArray<uint8>& HitFlags, const uint8 MuzzleIndex) const
+{
+	bool bPlayedImpactSound = false;
+	const USceneComponent* Muzzle = GetMuzzle(MuzzleIndex);
+	const FVector Start = Muzzle
+		? Muzzle->GetComponentLocation() : GetOwner()->GetActorLocation();
+
+	for (int32 PelletIndex = 0; PelletIndex < PelletEnds.Num(); ++PelletIndex)
+	{
+		if (!HitFlags.IsValidIndex(PelletIndex) || HitFlags[PelletIndex] == 0)
+		{
+			continue;
+		}
+
+		const FVector End = FVector(PelletEnds[PelletIndex]);
+		const FVector Direction = (End - Start).GetSafeNormal();
+		if (ImpactEffect)
+		{
+			UNiagaraFunctionLibrary::SpawnSystemAtLocation(
+				GetWorld(), ImpactEffect, End, (-Direction).Rotation());
+		}
+		if (!bPlayedImpactSound && ShotgunImpactSound
+			&& GetNetMode() != NM_DedicatedServer)
+		{
+			UGameplayStatics::SpawnSoundAtLocation(this, ShotgunImpactSound, End);
+			bPlayedImpactSound = true;
+		}
+	}
+}
+
 USceneComponent* UShotgunGunComponent::GetMuzzle(const uint8 MuzzleIndex) const
 {
 	USceneComponent* Preferred = MuzzleIndex == 0 ? LeftMuzzle.Get() : RightMuzzle.Get();
@@ -361,4 +411,16 @@ void UShotgunGunComponent::GetLifetimeReplicatedProps(
 	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
 	DOREPLIFETIME_CONDITION(UShotgunGunComponent, ServerBlastsFired, COND_OwnerOnly);
 	DOREPLIFETIME_CONDITION(UShotgunGunComponent, ServerPelletHits, COND_OwnerOnly);
+}
+bool UShotgunGunComponent::GetCooldownStatus(float& OutRemainingSeconds,
+	float& OutDurationSeconds) const
+{
+	const UJetStatsComponent* Stats = GetOwner()
+		? GetOwner()->FindComponentByClass<UJetStatsComponent>() : nullptr;
+	OutDurationSeconds = Stats
+		? 1.0f / FMath::Max(0.1f, Stats->GetShotgunStats().ShotsPerSecond) : 0.0f;
+	const double Now = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0;
+	OutRemainingSeconds = FMath::Clamp(
+		static_cast<float>(NextLocalShotTime - Now), 0.0f, OutDurationSeconds);
+	return OutDurationSeconds > UE_SMALL_NUMBER;
 }

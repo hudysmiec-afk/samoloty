@@ -7,6 +7,9 @@
 class ARocketProjectile;
 class USceneComponent;
 class USoundBase;
+struct FRocketBarrageStats;
+struct FRocketLaunchData;
+struct FRocketSeparationPath;
 
 UENUM(BlueprintType)
 enum class ERocketWeaponState : uint8
@@ -32,6 +35,8 @@ public:
 	virtual void SetFirePoints(USceneComponent* LeftPoint, USceneComponent* RightPoint) override;
 
 	virtual void SetFireHeld(bool bHeld) override;
+	virtual bool GetCooldownStatus(float& OutRemainingSeconds,
+		float& OutDurationSeconds) const override;
 
 	UFUNCTION(BlueprintPure, Category="Plane|Weapons")
 	ERocketWeaponState GetWeaponState() const { return WeaponState; }
@@ -49,6 +54,16 @@ protected:
 	/** Local 3D sound played once for each complete salvo, not once per rocket. */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Plane|Weapons|Effects")
 	TObjectPtr<USoundBase> RocketLaunchSound;
+
+	/** Called once on the server before every salvo. Derived barrage variants can cache a shared aim point. */
+	virtual void PrepareSalvo(const FRocketBarrageStats& Stats);
+
+	/** Allows a barrage variant to alter only the final flight direction while retaining shared salvo logic. */
+	virtual void ConfigureRocketLaunchData(FRocketLaunchData& LaunchData,
+		const FRocketSeparationPath& SeparationPath, FRandomStream& RandomStream) const;
+
+	/** Copies shared projectile/effect defaults only where this component still uses native defaults. */
+	void InheritMissingPresentationFrom(const URocketWeaponComponent& Source);
 
 private:
 	virtual void OnWeaponEquippedChanged() override;

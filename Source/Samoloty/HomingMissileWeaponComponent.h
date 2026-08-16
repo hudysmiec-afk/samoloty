@@ -34,6 +34,11 @@ public:
 	virtual void SetFireHeld(bool bHeld) override;
 	virtual void SetFirePoints(USceneComponent* LeftPoint, USceneComponent* RightPoint) override;
 	virtual void RejectCurrentTarget() override;
+	virtual bool GetCooldownStatus(float& OutRemainingSeconds,
+		float& OutDurationSeconds) const override;
+
+	/** Server-only firing entry used by AI that owns its target selection. */
+	void SetAITargetAndFire(AActor* TargetActor, bool bHeld);
 
 	UFUNCTION(BlueprintPure, Category="Plane|Weapons")
 	EHomingMissileWeaponState GetWeaponState() const { return WeaponState; }

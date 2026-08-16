@@ -23,6 +23,9 @@ public:
 	UFUNCTION(BlueprintPure, Category="Plane|Targeting")
 	AActor* GetSelectedTarget() const { return SelectedTarget.Get(); }
 
+	/** Local selection on the owner and the client-reported selection on authority. */
+	AActor* GetSelectedTargetForAimAssist() const;
+
 	UFUNCTION(BlueprintPure, Category="Plane|Targeting")
 	bool HasSelectedTarget() const { return SelectedTarget.IsValid(); }
 
@@ -50,6 +53,9 @@ public:
 	bool bShowSelectionDebug = false;
 
 private:
+	UFUNCTION(Server, Reliable)
+	void ServerSetSelectedTarget(AActor* NewTarget);
+
 	void RefreshSelection();
 	void CleanupRejectedTargets(double Now);
 	void SetSelectedTarget(AActor* NewTarget);
@@ -60,6 +66,7 @@ private:
 	void DrawSelectionDebug() const;
 
 	TWeakObjectPtr<AActor> SelectedTarget;
+	TWeakObjectPtr<AActor> ServerSelectedTarget;
 	TMap<TWeakObjectPtr<AActor>, double> RejectedTargetsUntil;
 	float RefreshAccumulator = 0.0f;
 };

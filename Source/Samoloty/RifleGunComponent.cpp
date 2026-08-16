@@ -2,6 +2,7 @@
 
 #include "ArcadeFlightComponent.h"
 #include "HealthComponent.h"
+#include "GunAimAssistComponent.h"
 #include "JetStatsComponent.h"
 #include "RifleTracerVisual.h"
 #include "Components/SceneComponent.h"
@@ -182,7 +183,9 @@ void URifleGunComponent::FirePredictedShot()
 	FVector Start, End, Direction;
 	bool bHit = false;
 	BuildShot(LocalMuzzleIndex, false, Start, End, Direction, bHit);
-	PlayShotVisual(Start, End, Direction, LocalMuzzleIndex, bHit);
+	// The muzzle flash and tracer are predicted for responsive controls, but an impact
+	// must never be predicted. Only the server-confirmed trace may display it.
+	PlayShotVisual(Start, End, Direction, LocalMuzzleIndex, false);
 	LocalMuzzleIndex ^= 1;
 }
 
@@ -217,7 +220,17 @@ bool URifleGunComponent::BuildShot(const uint8 MuzzleIndex, const bool bApplyDam
 	{
 		const FVector CameraOrigin = bApplyDamage ? ServerCameraOrigin : LocalCameraOrigin;
 		const FVector RequestedDirection = bApplyDamage ? ServerCameraDirection : LocalCameraDirection;
-		const FVector CameraDirection = RequestedDirection.GetSafeNormal();
+		FVector CameraDirection = RequestedDirection.GetSafeNormal();
+		if (const UGunAimAssistComponent* AimAssist =
+			GetOwner()->FindComponentByClass<UGunAimAssistComponent>())
+		{
+			FVector AssistedAimPoint;
+			if (AimAssist->FindAssistedAimPoint(
+				CameraOrigin, CameraDirection, Stats.MaxRange, AssistedAimPoint))
+			{
+				CameraDirection = (AssistedAimPoint - CameraOrigin).GetSafeNormal();
+			}
+		}
 		FVector AimPoint = FindCameraAimPoint(
 			CameraOrigin, CameraDirection, Stats.MaxRange, Hit);
 		const float HitForwardDistance = FVector::DotProduct(
@@ -293,7 +306,13 @@ void URifleGunComponent::MulticastPlayShot_Implementation(const FVector_NetQuant
 	const APawn* Pawn = Cast<APawn>(GetOwner());
 	if (Pawn && Pawn->IsLocallyControlled())
 	{
-		return; // Owner already played an immediate predicted visual.
+		// The owner already played its muzzle flash and tracer immediately. It still
+		// needs the authoritative impact, whose position may differ on a moving target.
+		if (bHit)
+		{
+			PlayImpactVisual(End, Direction);
+		}
+		return;
 	}
 	PlayShotVisual(Start, End, Direction, MuzzleIndex, bHit);
 }
@@ -347,17 +366,27 @@ void URifleGunComponent::PlayShotVisual(const FVector& Start, const FVector& End
 	{
 		UGameplayStatics::SpawnSoundAtLocation(this, RifleFireSound, Start);
 	}
-	if (bHit && ImpactEffect)
+	if (bHit)
 	{
-		UNiagaraFunctionLibrary::SpawnSystemAtLocation(GetWorld(), ImpactEffect, End, (-Direction).Rotation());
-	}
-	if (bHit && RifleImpactSound && GetNetMode() != NM_DedicatedServer)
-	{
-		UGameplayStatics::SpawnSoundAtLocation(this, RifleImpactSound, End);
+		PlayImpactVisual(End, Direction);
 	}
 	if (bDrawShotDebug)
 	{
 		DrawDebugLine(GetWorld(), Start, End, bHit ? FColor::Red : FColor::Green, false, 0.25f, 0, 1.0f);
+	}
+}
+
+void URifleGunComponent::PlayImpactVisual(const FVector& ImpactPoint,
+	const FVector& ShotDirection) const
+{
+	if (ImpactEffect)
+	{
+		UNiagaraFunctionLibrary::SpawnSystemAtLocation(
+			GetWorld(), ImpactEffect, ImpactPoint, (-ShotDirection).Rotation());
+	}
+	if (RifleImpactSound && GetNetMode() != NM_DedicatedServer)
+	{
+		UGameplayStatics::SpawnSoundAtLocation(this, RifleImpactSound, ImpactPoint);
 	}
 }
 
@@ -376,4 +405,16 @@ void URifleGunComponent::DrawRifleDebug() const
 	const FString Message = FString::Printf(TEXT("RIFLE: %s | Server shots: %d | hits: %d"),
 		bLocalFireHeld ? TEXT("FIRING") : TEXT("READY"), ServerShotsFired, ServerHits);
 	GEngine->AddOnScreenDebugMessage(static_cast<uint64>(GetUniqueID()), 0.0f, FColor::Cyan, Message);
+}
+bool URifleGunComponent::GetCooldownStatus(float& OutRemainingSeconds,
+	float& OutDurationSeconds) const
+{
+	const UJetStatsComponent* Stats = GetOwner()
+		? GetOwner()->FindComponentByClass<UJetStatsComponent>() : nullptr;
+	OutDurationSeconds = Stats
+		? 1.0f / FMath::Max(0.1f, Stats->GetRifleGunStats().ShotsPerSecond) : 0.0f;
+	const double Now = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0;
+	OutRemainingSeconds = FMath::Clamp(
+		static_cast<float>(NextLocalShotTime - Now), 0.0f, OutDurationSeconds);
+	return OutDurationSeconds > UE_SMALL_NUMBER;
 }

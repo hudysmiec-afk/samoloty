@@ -5,15 +5,25 @@
 #include "ArcadeJetPawn.generated.h"
 
 class UArcadeFlightComponent;
+class UAircraftCollisionComponent;
+class UBackwardDashComponent;
+class UBlinkComponent;
 class UCameraComponent;
+class UCapsuleComponent;
 class UBoxComponent;
 class UEvasiveRollComponent;
+class UForwardDashComponent;
+class UGroundBarrageWeaponComponent;
+class UGunAimAssistComponent;
 class UHealthComponent;
 class UJetBoostComponent;
 class UJetEngineAudioComponent;
 class UJetStatsComponent;
+class UNiagaraSystem;
 class UHomingMissileWeaponComponent;
 class UMissileTargetingComponent;
+class UMissileWarningComponent;
+class UPlaneAbilityQueueComponent;
 class URadarComponent;
 class UQuickReversalComponent;
 class URocketWeaponComponent;
@@ -24,6 +34,8 @@ class USpringArmComponent;
 class UStaticMeshComponent;
 class UTargetSelectionComponent;
 class UWeaponSystemComponent;
+class USoundBase;
+class UCameraShakeBase;
 
 /** Input, camera and presentation shell for the network-ready flight components. */
 UCLASS(Blueprintable)
@@ -42,8 +54,9 @@ public:
 	/** Temporarily replaces normal visual bank with the evasive roll orientation. */
 	void SetEvasiveRollPresentation(bool bActive, float RollDegrees);
 
-	/** Moves the logical plane while sweeping its box hitbox and returns the applied delta. */
-	FVector MovePlaneWithCollision(const FVector& RequestedMove);
+	/** Moves the logical plane with the shared movement capsule. */
+	FVector MovePlaneWithCollision(const FVector& RequestedMove, const FVector& RequestedVelocity,
+		bool bEnableImpactResponse = true);
 
 	/** Called by the flight component after movement/interpolation for deterministic camera order. */
 	void UpdateCameraAfterFlight(float DeltaSeconds);
@@ -63,8 +76,22 @@ protected:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Plane|Components")
 	TObjectPtr<USceneComponent> VisualRoot;
 
+	/** Rounded non-root capsule used only for movement sweeps against the environment. */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Plane|Collision")
+	TObjectPtr<UCapsuleComponent> MovementCollision;
+
+	/** Query-only hitboxes; resize and reposition these per aircraft Blueprint. */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Plane|Collision")
+	TObjectPtr<UBoxComponent> BodyHitbox;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Plane|Collision")
+	TObjectPtr<UBoxComponent> LeftWingHitbox;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Plane|Collision")
+	TObjectPtr<UBoxComponent> RightWingHitbox;
+
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Plane|Components")
-	TObjectPtr<UBoxComponent> Collision;
+	TObjectPtr<UAircraftCollisionComponent> AircraftCollision;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Plane|Components")
 	TObjectPtr<UStaticMeshComponent> PlaneMesh;
@@ -85,13 +112,34 @@ protected:
 	TObjectPtr<UQuickReversalComponent> QuickReversal;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Plane|Components")
+	TObjectPtr<UBackwardDashComponent> BackwardDash;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Plane|Components")
+	TObjectPtr<UForwardDashComponent> ForwardDash;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Plane|Components")
+	TObjectPtr<UBlinkComponent> Blink;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Plane|Components")
+	TObjectPtr<UPlaneAbilityQueueComponent> AbilityQueue;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Plane|Components")
+	TObjectPtr<UGunAimAssistComponent> GunAimAssist;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Plane|Components")
 	TObjectPtr<UHealthComponent> Health;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Plane|Components")
 	TObjectPtr<URocketWeaponComponent> RocketWeapon;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Plane|Components")
+	TObjectPtr<UGroundBarrageWeaponComponent> GroundBarrageWeapon;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Plane|Components")
 	TObjectPtr<UMissileTargetingComponent> MissileTargeting;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Plane|Components")
+	TObjectPtr<UMissileWarningComponent> MissileWarning;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Plane|Components")
 	TObjectPtr<URadarComponent> Radar;
@@ -161,6 +209,9 @@ private:
 	void RegisterLeftRollTap();
 	void RegisterRightRollTap();
 	void ActivateQuickReversal();
+	void ActivateBackwardDash();
+	void ActivateForwardDash();
+	void ActivateBlink();
 	void SetBrake(float Value);
 	void StartBoost();
 	void StopBoost();
@@ -170,6 +221,12 @@ private:
 	void AddHoverCameraPitchInput(float Value);
 	void BeginHoverCameraOrbit();
 	void EndHoverCameraOrbit();
+	void BeginRearView();
+	void EndRearView();
+	void BeginRearViewOrbit();
+	void EndRearViewOrbit();
+	void CaptureCameraMouse();
+	void ReleaseCameraMouse();
 	void StartMissileFire();
 	void StopMissileFire();
 	void StartGunFire();
@@ -187,6 +244,12 @@ private:
 	bool bHoverCameraOrbitHeld = false;
 	float HoverCameraOrbitYaw = 0.0f;
 	float HoverCameraOrbitPitch = 0.0f;
+	bool bRearViewHeld = false;
+	bool bRearViewOrbitHeld = false;
+	bool bSnapToFlightCamera = false;
+	float RearViewOrbitYaw = 0.0f;
+	float RearViewOrbitPitch = 0.0f;
+	float RearViewCameraDistance = 1500.0f;
 	float CurrentHoverCameraDistance = 1400.0f;
 	FVector CurrentCameraWorldPosition = FVector::ZeroVector;
 	FRotator CurrentCameraWorldRotation = FRotator::ZeroRotator;

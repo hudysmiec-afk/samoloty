@@ -29,6 +29,8 @@ public:
 	virtual void SetFirePoints(USceneComponent* LeftPoint, USceneComponent* RightPoint) override;
 
 	virtual void SetFireHeld(bool bHeld) override;
+	virtual bool GetCooldownStatus(float& OutRemainingSeconds,
+		float& OutDurationSeconds) const override;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Plane|Weapons|Rifle|Debug")
 	bool bDrawShotDebug = false;
@@ -80,6 +82,7 @@ private:
 	void FirePredictedShot();
 	void PlayShotVisual(const FVector& Start, const FVector& End, const FVector& Direction,
 		uint8 MuzzleIndex, bool bHit) const;
+	void PlayImpactVisual(const FVector& ImpactPoint, const FVector& ShotDirection) const;
 	bool BuildShot(uint8 MuzzleIndex, bool bApplyDamage, FVector& OutStart, FVector& OutEnd,
 		FVector& OutDirection, bool& bOutHit) const;
 	FVector FindCameraAimPoint(const FVector& CameraOrigin, const FVector& CameraDirection,

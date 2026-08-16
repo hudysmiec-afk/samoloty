@@ -3,6 +3,7 @@
 #include "ArcadeFlightComponent.h"
 #include "ArcadeJetPawn.h"
 #include "HealthComponent.h"
+#include "PlaneAbilityQueueComponent.h"
 #include "GameFramework/Actor.h"
 #include "GameFramework/GameStateBase.h"
 #include "Net/UnrealNetwork.h"
@@ -28,6 +29,7 @@ void UEvasiveRollComponent::BeginPlay()
 	{
 		CachedFlightComponent = Owner->FindComponentByClass<UArcadeFlightComponent>();
 		CachedHealthComponent = Owner->FindComponentByClass<UHealthComponent>();
+		CachedAbilityQueueComponent = Owner->FindComponentByClass<UPlaneAbilityQueueComponent>();
 	}
 }
 
@@ -45,31 +47,44 @@ void UEvasiveRollComponent::RegisterStrafeTap(const EEvasiveRollDirection Direct
 	const bool bIsDoubleTap = PreviousTapTime >= 0.0
 		&& Now - PreviousTapTime <= EvasiveRollTuning::DoubleTapWindow;
 	PreviousTapTime = bIsDoubleTap ? -1.0 : Now;
-	if (!bIsDoubleTap || Now < LocalNextAllowedTime || IsRolling())
+	if (!bIsDoubleTap || Now < LocalNextAllowedTime)
 	{
 		return;
 	}
-	if (!CachedFlightComponent || !CachedFlightComponent->IsCombatFlightEnabled()
+	if (!CachedAbilityQueueComponent)
+	{
+		return;
+	}
+	CachedAbilityQueueComponent->RequestAbility(
+		Direction == EEvasiveRollDirection::Left
+			? EPlaneAbilityType::EvasiveRollLeft
+			: EPlaneAbilityType::EvasiveRollRight);
+}
+
+void UEvasiveRollComponent::PredictAbilityQueueRoll(
+	const EEvasiveRollDirection Direction)
+{
+	const APawn* OwnerPawn = Cast<APawn>(GetOwner());
+	if (!OwnerPawn || !OwnerPawn->IsLocallyControlled() || IsRolling()
+		|| GetLocalTime() < LocalNextAllowedTime
+		|| !CachedFlightComponent || !CachedFlightComponent->IsCombatFlightEnabled()
 		|| (CachedHealthComponent && CachedHealthComponent->IsDead()))
 	{
 		return;
 	}
-
-	if (GetOwner()->HasAuthority())
-	{
-		if (CanStartRoll())
-		{
-			StartAuthoritativeRoll(Direction);
-			LocalNextAllowedTime = Now + EvasiveRollTuning::RollCooldown;
-		}
-		return;
-	}
-
-	// Visual response is immediate. The server can still reject it when authoritative
-	// hover, boost, death or cooldown state does not permit the maneuver.
 	StartLocalPrediction(Direction);
-	LocalNextAllowedTime = Now + EvasiveRollTuning::RollCooldown;
-	ServerRequestRoll(Direction);
+	LocalNextAllowedTime = GetLocalTime() + EvasiveRollTuning::RollCooldown;
+}
+
+bool UEvasiveRollComponent::TryActivateFromAbilityQueue(
+	const EEvasiveRollDirection Direction)
+{
+	if (!CanStartRoll())
+	{
+		return false;
+	}
+	StartAuthoritativeRoll(Direction);
+	return true;
 }
 
 void UEvasiveRollComponent::ServerRequestRoll_Implementation(const EEvasiveRollDirection Direction)
@@ -216,6 +231,16 @@ void UEvasiveRollComponent::OnRep_RollState()
 bool UEvasiveRollComponent::IsRolling() const
 {
 	return bLocalPredictionActive || RollState.bActive;
+}
+
+bool UEvasiveRollComponent::IsRollManeuverInProgress() const
+{
+	if (bLocalPredictionActive)
+	{
+		return GetLocalTime() - LocalPredictionStartTime < EvasiveRollTuning::RollDuration;
+	}
+	return RollState.bActive
+		&& GetSynchronizedTime() - RollState.ServerStartTime < EvasiveRollTuning::RollDuration;
 }
 
 bool UEvasiveRollComponent::IsEvadingMissiles() const

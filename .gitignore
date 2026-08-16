@@ -8,6 +8,7 @@ Saved/
 .vs/
 .vscode/
 *.sln
+*.slnx
 *.suo
 *.opensdf
 *.sdf
@@ -30,6 +31,9 @@ Thumbs.db
 *.pdb
 *.obj
 *.pch
+
+# Locally generated cook/build ordering logs
+Build/**/FileOpenOrder/
 
 # Local reference sources used only for gameplay analysis
 Content/*_ep*_main/

@@ -1,13 +1,17 @@
 #include "ArcadeFlightComponent.h"
 
 #include "ArcadeJetPawn.h"
+#include "BackwardDashComponent.h"
 #include "EvasiveRollComponent.h"
+#include "ForwardDashComponent.h"
+#include "FlightBoundsVolume.h"
 #include "JetBoostComponent.h"
 #include "JetStatsComponent.h"
 #include "QuickReversalComponent.h"
 #include "GameFramework/Actor.h"
 #include "GameFramework/GameStateBase.h"
 #include "GameFramework/Pawn.h"
+#include "EngineUtils.h"
 #include "Net/UnrealNetwork.h"
 
 namespace ArcadeFlightTuning
@@ -40,6 +44,13 @@ void UArcadeFlightComponent::BeginPlay()
 		CachedBoostComponent = Owner->FindComponentByClass<UJetBoostComponent>();
 		CachedEvasiveRollComponent = Owner->FindComponentByClass<UEvasiveRollComponent>();
 		CachedQuickReversalComponent = Owner->FindComponentByClass<UQuickReversalComponent>();
+		CachedBackwardDashComponent = Owner->FindComponentByClass<UBackwardDashComponent>();
+		CachedForwardDashComponent = Owner->FindComponentByClass<UForwardDashComponent>();
+		for (TActorIterator<AFlightBoundsVolume> It(GetWorld()); It; ++It)
+		{
+			CachedFlightBounds = *It;
+			break;
+		}
 		// Input is collected by the Pawn first. Flight then updates the authoritative
 		// transform before the local camera and weapon aim are refreshed.
 		AddTickPrerequisiteActor(Owner);
@@ -139,6 +150,7 @@ void UArcadeFlightComponent::TickComponent(const float DeltaTime, const ELevelTi
 		bLocalHoverEntryPending = false;
 	}
 	const APawn* OwnerPawn = Cast<APawn>(GetOwner());
+	UpdateBoundaryState();
 	const UJetStatsComponent* StatsComponent = CachedStatsComponent;
 	if (StatsComponent)
 	{
@@ -235,6 +247,45 @@ void UArcadeFlightComponent::SimulateFlight(const float DeltaTime)
 	MoveAircraft(DeltaTime, Stats);
 }
 
+void UArcadeFlightComponent::UpdateBoundaryState()
+{
+	BoundaryWarningAlpha = 0.0f;
+	if (!CachedFlightBounds || !GetOwner())
+	{
+		return;
+	}
+
+	bool bOutside = false;
+	CachedFlightBounds->GetBoundaryInfo(
+		GetOwner()->GetActorLocation(), BoundaryWarningAlpha, bOutside);
+	if (!GetOwner()->HasAuthority())
+	{
+		return;
+	}
+
+	const bool bWasReturning = bBoundaryReturnActive;
+	if (!bBoundaryReturnActive && bOutside)
+	{
+		bBoundaryReturnActive = true;
+	}
+	else if (bBoundaryReturnActive
+		&& CachedFlightBounds->IsSafelyInside(GetOwner()->GetActorLocation()))
+	{
+		bBoundaryReturnActive = false;
+		BoundaryTurnVisualInput = 0.0f;
+		SmoothedSteering = FVector2D::ZeroVector;
+	}
+	if (bBoundaryReturnActive)
+	{
+		BoundaryReturnTarget = CachedFlightBounds->GetReturnTarget(
+			GetOwner()->GetActorLocation());
+	}
+	if (bWasReturning != bBoundaryReturnActive)
+	{
+		GetOwner()->ForceNetUpdate();
+	}
+}
+
 void UArcadeFlightComponent::UpdateReplicatedState()
 {
 	ServerState.Location = GetOwner()->GetActorLocation();
@@ -244,7 +295,28 @@ void UArcadeFlightComponent::UpdateReplicatedState()
 	ServerState.BrakeAlpha = static_cast<uint8>(FMath::RoundToInt(
 		FMath::Clamp(SmoothedBrake, 0.0f, 1.0f) * 255.0f));
 	ServerState.ServerTimeSeconds = GetWorld()->GetTimeSeconds();
-	ServerState.bTeleport = false;
+	ServerState.bTeleport = bAuthoritativeTeleportPending;
+	bAuthoritativeTeleportPending = false;
+}
+
+void UArcadeFlightComponent::NotifyAuthoritativeTeleport()
+{
+	if (!GetOwner() || !GetOwner()->HasAuthority())
+	{
+		return;
+	}
+	bAuthoritativeTeleportPending = true;
+	UpdateReplicatedState();
+	GetOwner()->ForceNetUpdate();
+}
+
+void UArcadeFlightComponent::PrepareStraightManeuverExit()
+{
+	if (!GetOwner() || !GetOwner()->HasAuthority())
+	{
+		return;
+	}
+	SmoothedSteering = FVector2D::ZeroVector;
 }
 
 void UArcadeFlightComponent::OnRep_ServerState()
@@ -361,14 +433,44 @@ void UArcadeFlightComponent::GetLifetimeReplicatedProps(TArray<FLifetimeProperty
 	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
 	DOREPLIFETIME(UArcadeFlightComponent, ServerState);
 	DOREPLIFETIME(UArcadeFlightComponent, HoverState);
+	DOREPLIFETIME(UArcadeFlightComponent, bBoundaryReturnActive);
 }
 
 void UArcadeFlightComponent::RotateAircraft(const float DeltaTime, const FJetFlightStats& Stats)
 {
 	const FRotator CurrentRotation = GetOwner()->GetActorRotation();
+	if (bBoundaryReturnActive && CachedFlightBounds)
+	{
+		const FVector ToTarget = BoundaryReturnTarget - GetOwner()->GetActorLocation();
+		if (!ToTarget.IsNearlyZero())
+		{
+			FRotator TargetRotation = ToTarget.Rotation();
+			TargetRotation.Pitch = FMath::Clamp(TargetRotation.Pitch, -Stats.MaxPitch, Stats.MaxPitch);
+			TargetRotation.Roll = 0.0f;
+			const float DeltaYaw = FMath::FindDeltaAngleDegrees(CurrentRotation.Yaw, TargetRotation.Yaw);
+			BoundaryTurnVisualInput = FMath::Clamp(
+				DeltaYaw / FMath::Max(1.0f, CachedFlightBounds->GetReturnTurnRate()), -1.0f, 1.0f);
+			GetOwner()->SetActorRotation(FMath::RInterpConstantTo(
+				CurrentRotation, TargetRotation, DeltaTime,
+				CachedFlightBounds->GetReturnTurnRate()));
+		}
+		return;
+	}
 	FQuat ManeuverRotation = FQuat::Identity;
 	if (CachedQuickReversalComponent
 		&& CachedQuickReversalComponent->GetAuthoritativeFlightRotation(ManeuverRotation))
+	{
+		GetOwner()->SetActorRotation(ManeuverRotation);
+		return;
+	}
+	if (CachedBackwardDashComponent
+		&& CachedBackwardDashComponent->GetAuthoritativeFlightRotation(ManeuverRotation))
+	{
+		GetOwner()->SetActorRotation(ManeuverRotation);
+		return;
+	}
+	if (CachedForwardDashComponent
+		&& CachedForwardDashComponent->GetAuthoritativeFlightRotation(ManeuverRotation))
 	{
 		GetOwner()->SetActorRotation(ManeuverRotation);
 		return;
@@ -419,15 +521,18 @@ void UArcadeFlightComponent::UpdateVisualBank(const float DeltaTime)
 	// fraction toward it. Clamping happens afterwards. This is important: changing
 	// direction must carry the existing bank smoothly through zero instead of
 	// replacing it with the new side's angle in one frame.
+	const float EffectiveTurnInput = bBoundaryReturnActive
+		? BoundaryTurnVisualInput : SmoothedSteering.X;
 	const float TurnBankTarget = FMath::RadiansToDegrees(
 		2.0f
 		* ArcadeFlightTuning::CursorSideRateMax
 		* ArcadeFlightTuning::VisualBankControlRate
-		* SmoothedSteering.X);
+		* -EffectiveTurnInput);
 	const float StrafeBankTarget = FMath::RadiansToDegrees(
-		ArcadeFlightTuning::VisualBankControlRate * SmoothedStrafe);
-	const bool bStrafeInfluencesBank = FMath::Abs(RawStrafe) > KINDA_SMALL_NUMBER
-		|| FMath::Abs(SmoothedStrafe) > 0.01f;
+		ArcadeFlightTuning::VisualBankControlRate * -SmoothedStrafe);
+	const bool bStrafeInfluencesBank = !bBoundaryReturnActive
+		&& (FMath::Abs(RawStrafe) > KINDA_SMALL_NUMBER
+		|| FMath::Abs(SmoothedStrafe) > 0.01f);
 	const float TargetBankDegrees =
 		(bStrafeInfluencesBank ? StrafeBankTarget : TurnBankTarget) * FlightAlpha;
 	CurrentVisualBankDegrees += (TargetBankDegrees - CurrentVisualBankDegrees)
@@ -473,6 +578,51 @@ void UArcadeFlightComponent::MoveAircraft(const float DeltaTime, const FJetFligh
 	const float MaximumStrafeSpeed = Stats.ForwardSpeed * Stats.StrafeSpeedMultiplier;
 	const FVector DesiredLateralVelocity = GetOwner()->GetActorRightVector()
 		* SmoothedStrafe * MaximumStrafeSpeed;
+	if (CachedForwardDashComponent
+		&& CachedForwardDashComponent->ConsumeAuthoritativeMovement(
+			Stats.ForwardSpeed, ManeuverVelocity, ManeuverForwardSpeed))
+	{
+		CurrentForwardSpeed = ManeuverForwardSpeed;
+		CurrentVelocity = ManeuverVelocity;
+		const FVector RequestedMove = ManeuverVelocity * DeltaTime;
+		if (AArcadeJetPawn* Plane = Cast<AArcadeJetPawn>(GetOwner()))
+		{
+			CurrentVelocity = Plane->MovePlaneWithCollision(RequestedMove, ManeuverVelocity);
+		}
+		else
+		{
+			GetOwner()->AddActorWorldOffset(
+				RequestedMove, false, nullptr, ETeleportType::None);
+		}
+		CurrentForwardSpeed = FVector::DotProduct(
+			CurrentVelocity, GetOwner()->GetActorForwardVector());
+		return;
+	}
+	if (CachedBackwardDashComponent
+		&& CachedBackwardDashComponent->ConsumeAuthoritativeMovement(
+			DeltaTime,
+			Stats.ForwardSpeed,
+			DesiredLateralVelocity,
+			ManeuverVelocity,
+			ManeuverForwardSpeed))
+	{
+		CurrentForwardSpeed = ManeuverForwardSpeed;
+		CurrentVelocity = ManeuverVelocity;
+
+		const FVector RequestedMove = ManeuverVelocity * DeltaTime;
+		if (AArcadeJetPawn* Plane = Cast<AArcadeJetPawn>(GetOwner()))
+		{
+			CurrentVelocity = Plane->MovePlaneWithCollision(RequestedMove, ManeuverVelocity);
+		}
+		else
+		{
+			GetOwner()->AddActorWorldOffset(
+				RequestedMove, false, nullptr, ETeleportType::None);
+		}
+		CurrentForwardSpeed = FVector::DotProduct(
+			CurrentVelocity, GetOwner()->GetActorForwardVector());
+		return;
+	}
 	if (CachedQuickReversalComponent
 		&& CachedQuickReversalComponent->ConsumeAuthoritativeMovement(
 			DeltaTime,
@@ -490,9 +640,7 @@ void UArcadeFlightComponent::MoveAircraft(const float DeltaTime, const FJetFligh
 		const FVector RequestedMove = ManeuverVelocity * DeltaTime;
 		if (AArcadeJetPawn* Plane = Cast<AArcadeJetPawn>(GetOwner()))
 		{
-			const FVector AppliedMove = Plane->MovePlaneWithCollision(RequestedMove);
-			CurrentVelocity = DeltaTime > UE_SMALL_NUMBER
-				? AppliedMove / DeltaTime : FVector::ZeroVector;
+			CurrentVelocity = Plane->MovePlaneWithCollision(RequestedMove, ManeuverVelocity);
 		}
 		else
 		{
@@ -570,8 +718,9 @@ void UArcadeFlightComponent::MoveAircraft(const float DeltaTime, const FJetFligh
 	const FVector RequestedMove = Velocity * DeltaTime;
 	if (AArcadeJetPawn* Plane = Cast<AArcadeJetPawn>(GetOwner()))
 	{
-		const FVector AppliedMove = Plane->MovePlaneWithCollision(RequestedMove);
-		CurrentVelocity = DeltaTime > UE_SMALL_NUMBER ? AppliedMove / DeltaTime : FVector::ZeroVector;
+		CurrentVelocity = Plane->MovePlaneWithCollision(RequestedMove, Velocity);
+		CurrentForwardSpeed = FMath::Max(0.0f, FVector::DotProduct(
+			CurrentVelocity, GetOwner()->GetActorForwardVector()));
 	}
 	else
 	{

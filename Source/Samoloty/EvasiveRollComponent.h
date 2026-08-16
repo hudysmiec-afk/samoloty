@@ -6,6 +6,7 @@
 
 class UArcadeFlightComponent;
 class UHealthComponent;
+class UPlaneAbilityQueueComponent;
 
 UENUM(BlueprintType)
 enum class EEvasiveRollDirection : uint8
@@ -51,9 +52,14 @@ public:
 
 	/** Called once for each new A/D press; holding the key does not count as another tap. */
 	void RegisterStrafeTap(EEvasiveRollDirection Direction);
+	void PredictAbilityQueueRoll(EEvasiveRollDirection Direction);
+	bool TryActivateFromAbilityQueue(EEvasiveRollDirection Direction);
 
 	UFUNCTION(BlueprintPure, Category="Plane|Evasive Roll")
 	bool IsRolling() const;
+
+	/** Exact roll timeline used by the server ability queue. */
+	bool IsRollManeuverInProgress() const;
 
 	/** Authoritative gameplay check used by missile projectiles and damage handling. */
 	UFUNCTION(BlueprintPure, Category="Plane|Evasive Roll")
@@ -87,6 +93,9 @@ private:
 
 	UPROPERTY(Transient)
 	TObjectPtr<UHealthComponent> CachedHealthComponent;
+
+	UPROPERTY(Transient)
+	TObjectPtr<UPlaneAbilityQueueComponent> CachedAbilityQueueComponent;
 
 	double LastLeftTapTime = -1.0;
 	double LastRightTapTime = -1.0;

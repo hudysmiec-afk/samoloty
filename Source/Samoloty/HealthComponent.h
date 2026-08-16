@@ -10,6 +10,8 @@ class UJetStatsComponent;
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FHealthChangedSignature, float, CurrentHealth, float, MaxHealth);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE(FHealthDepletedSignature);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FDamageReceivedSignature, AActor*, AttackerActor);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_ThreeParams(FDamageDealtSignature,
+	AActor*, DamagedActor, float, Damage, FVector, WorldLocation);
 
 UCLASS(ClassGroup=(Plane), meta=(BlueprintSpawnableComponent))
 class SAMOLOTY_API UHealthComponent : public UActorComponent
@@ -40,6 +42,10 @@ public:
 	UPROPERTY(BlueprintAssignable, Category="Plane|Health")
 	FDamageReceivedSignature OnDamageReceived;
 
+	/** Server-confirmed outgoing damage delivered only to the attacker's owning client. */
+	UPROPERTY(BlueprintAssignable, Category="Plane|Health")
+	FDamageDealtSignature OnDamageDealt;
+
 private:
 	UFUNCTION()
 	void HandleAnyDamage(AActor* DamagedActor, float Damage, const UDamageType* DamageType,
@@ -53,6 +59,10 @@ private:
 
 	UFUNCTION(Client, Unreliable)
 	void ClientNotifyDamageReceived(AActor* AttackerActor);
+
+	UFUNCTION(Client, Reliable)
+	void ClientNotifyDamageDealt(
+		AActor* DamagedActor, float Damage, FVector_NetQuantize WorldLocation);
 
 	const UJetStatsComponent* GetStatsComponent() const;
 

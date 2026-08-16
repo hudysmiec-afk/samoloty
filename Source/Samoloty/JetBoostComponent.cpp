@@ -1,6 +1,8 @@
 #include "JetBoostComponent.h"
 
 #include "ArcadeFlightComponent.h"
+#include "BackwardDashComponent.h"
+#include "ForwardDashComponent.h"
 #include "JetStatsComponent.h"
 #include "QuickReversalComponent.h"
 #include "Engine/Engine.h"
@@ -24,6 +26,10 @@ void UJetBoostComponent::BeginPlay()
 	}
 	CachedQuickReversalComponent = GetOwner()
 		? GetOwner()->FindComponentByClass<UQuickReversalComponent>() : nullptr;
+	CachedBackwardDashComponent = GetOwner()
+		? GetOwner()->FindComponentByClass<UBackwardDashComponent>() : nullptr;
+	CachedForwardDashComponent = GetOwner()
+		? GetOwner()->FindComponentByClass<UForwardDashComponent>() : nullptr;
 }
 
 void UJetBoostComponent::TickComponent(const float DeltaTime, const ELevelTick TickType,
@@ -40,7 +46,11 @@ void UJetBoostComponent::TickComponent(const float DeltaTime, const ELevelTick T
 	if (GetOwner()->HasAuthority())
 	{
 		const bool bMobilityOverride = CachedQuickReversalComponent
-			&& CachedQuickReversalComponent->IsReversalActive();
+			&& CachedQuickReversalComponent->IsReversalActive()
+			|| CachedBackwardDashComponent
+			&& CachedBackwardDashComponent->IsDashActive()
+			|| CachedForwardDashComponent
+			&& CachedForwardDashComponent->IsDashActive();
 		const bool bCanBoost = !bMobilityOverride
 			&& bLocalBoostRequested && CurrentEnergy > KINDA_SMALL_NUMBER;
 		SetAuthoritativeBoostState(bCanBoost);
@@ -54,7 +64,8 @@ void UJetBoostComponent::TickComponent(const float DeltaTime, const ELevelTick T
 				SetAuthoritativeBoostState(false);
 			}
 		}
-		else
+		else if (!CachedForwardDashComponent
+			|| !CachedForwardDashComponent->IsDashActive())
 		{
 			TimeSinceBoostStopped += DeltaTime;
 			if (TimeSinceBoostStopped >= Values.BoostRegenDelay)
@@ -75,6 +86,14 @@ void UJetBoostComponent::TickComponent(const float DeltaTime, const ELevelTick T
 
 bool UJetBoostComponent::IsBoosting() const
 {
+	if (CachedForwardDashComponent && CachedForwardDashComponent->IsDashActive())
+	{
+		return true;
+	}
+	if (CachedBackwardDashComponent && CachedBackwardDashComponent->IsDashActive())
+	{
+		return false;
+	}
 	if (CachedQuickReversalComponent
 		&& CachedQuickReversalComponent->IsReversalActive())
 	{
@@ -85,6 +104,14 @@ bool UJetBoostComponent::IsBoosting() const
 
 float UJetBoostComponent::GetBoostAlpha() const
 {
+	if (CachedForwardDashComponent && CachedForwardDashComponent->IsDashActive())
+	{
+		return 1.0f;
+	}
+	if (CachedBackwardDashComponent && CachedBackwardDashComponent->IsDashActive())
+	{
+		return 0.0f;
+	}
 	if (CachedQuickReversalComponent
 		&& CachedQuickReversalComponent->IsReversalActive())
 	{
@@ -95,6 +122,10 @@ float UJetBoostComponent::GetBoostAlpha() const
 
 float UJetBoostComponent::GetEnginePowerAlpha() const
 {
+	if (CachedBackwardDashComponent && CachedBackwardDashComponent->IsDashActive())
+	{
+		return 0.0f;
+	}
 	return CachedQuickReversalComponent
 		? 1.0f - CachedQuickReversalComponent->GetEngineCutAlpha() : 1.0f;
 }

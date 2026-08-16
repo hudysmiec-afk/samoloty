@@ -75,6 +75,15 @@ void UHomingMissileWeaponComponent::RejectCurrentTarget()
 	UpdateRequestedTargetFromLocal();
 }
 
+void UHomingMissileWeaponComponent::SetAITargetAndFire(AActor* TargetActor, const bool bHeld)
+{
+	if (!GetOwner() || !GetOwner()->HasAuthority())
+	{
+		return;
+	}
+	SetAuthoritativeFireHeld(bHeld, bHeld ? TargetActor : nullptr);
+}
+
 void UHomingMissileWeaponComponent::ServerSetFireHeld_Implementation(const bool bHeld,
 	AActor* RequestedTargetActor)
 {
@@ -372,14 +381,17 @@ AActor* UHomingMissileWeaponComponent::ValidateRequestedTarget(AActor* TargetAct
 	const UHealthComponent* TargetHealth = TargetActor->FindComponentByClass<UHealthComponent>();
 	const UJetStatsComponent* StatsComponent = GetOwner()->FindComponentByClass<UJetStatsComponent>();
 	const URadarComponent* Radar = GetOwner()->FindComponentByClass<URadarComponent>();
-	if (!TargetHealth || TargetHealth->IsDead() || !StatsComponent || !Radar)
+	if (!TargetHealth || TargetHealth->IsDead() || !StatsComponent)
 	{
 		return nullptr;
 	}
 
 	const FHomingMissileStats& Stats = StatsComponent->GetHomingMissileStats();
 	const FVector ToTarget = TargetActor->GetActorLocation() - GetOwner()->GetActorLocation();
-	if (!Radar->IsWithinMissileTargetingRange(TargetActor, Stats.LockRange, 1.15f))
+	const bool bWithinRange = Radar
+		? Radar->IsWithinMissileTargetingRange(TargetActor, Stats.LockRange, 1.15f)
+		: ToTarget.SizeSquared() <= FMath::Square(Stats.LockRange * 1.15f);
+	if (!bWithinRange)
 	{
 		return nullptr;
 	}
@@ -449,4 +461,16 @@ void UHomingMissileWeaponComponent::GetLifetimeReplicatedProps(
 	DOREPLIFETIME_CONDITION(UHomingMissileWeaponComponent, WeaponState, COND_OwnerOnly);
 	DOREPLIFETIME_CONDITION(UHomingMissileWeaponComponent, SalvosFired, COND_OwnerOnly);
 	DOREPLIFETIME_CONDITION(UHomingMissileWeaponComponent, NextActionServerTime, COND_OwnerOnly);
+}
+bool UHomingMissileWeaponComponent::GetCooldownStatus(float& OutRemainingSeconds,
+	float& OutDurationSeconds) const
+{
+	const UJetStatsComponent* Stats = GetOwner()
+		? GetOwner()->FindComponentByClass<UJetStatsComponent>() : nullptr;
+	OutDurationSeconds = Stats ? Stats->GetHomingMissileStats().Cooldown : 0.0f;
+	OutRemainingSeconds = WeaponState == EHomingMissileWeaponState::Cooldown
+		? FMath::Clamp(static_cast<float>(NextActionServerTime - GetServerTimeSeconds()),
+			0.0f, OutDurationSeconds)
+		: 0.0f;
+	return OutDurationSeconds > UE_SMALL_NUMBER;
 }

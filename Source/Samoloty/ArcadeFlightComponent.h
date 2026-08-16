@@ -6,8 +6,11 @@
 
 class UJetBoostComponent;
 class UJetStatsComponent;
+class UBackwardDashComponent;
 class UEvasiveRollComponent;
+class UForwardDashComponent;
 class UQuickReversalComponent;
+class AFlightBoundsVolume;
 
 UENUM(BlueprintType)
 enum class EArcadeHoverState : uint8
@@ -75,6 +78,12 @@ public:
 	UFUNCTION(BlueprintPure, Category="Plane|Flight")
 	FVector GetCurrentVelocity() const { return CurrentVelocity; }
 
+	/** Immediately publishes the current authoritative transform as a teleport. */
+	void NotifyAuthoritativeTeleport();
+
+	/** Hands control back after a locked maneuver without applying stored turn input at once. */
+	void PrepareStraightManeuverExit();
+
 	UFUNCTION(BlueprintPure, Category="Plane|Flight")
 	float GetCurrentTurnRateMultiplier() const;
 
@@ -100,6 +109,12 @@ public:
 		return HoverState == EArcadeHoverState::Flying && !bLocalHoverEntryPending;
 	}
 
+	UFUNCTION(BlueprintPure, Category="Plane|Flight|Boundary")
+	float GetBoundaryWarningAlpha() const { return BoundaryWarningAlpha; }
+
+	UFUNCTION(BlueprintPure, Category="Plane|Flight|Boundary")
+	bool IsBoundaryReturnActive() const { return bBoundaryReturnActive; }
+
 private:
 	UFUNCTION(Server, Unreliable)
 	void ServerSetFlightInput(FVector2D Steering, float Strafe, float Brake);
@@ -121,6 +136,7 @@ private:
 	float CalculateTurnRateMultiplier(const struct FJetFlightStats& Stats) const;
 	void SetAuthoritativeHoverState(EArcadeHoverState NewState);
 	void UpdateHoverPresentation(float DeltaTime, const struct FJetFlightStats& Stats);
+	void UpdateBoundaryState();
 
 	UFUNCTION()
 	void OnRep_ServerState();
@@ -142,6 +158,9 @@ private:
 	UPROPERTY(Replicated)
 	EArcadeHoverState HoverState = EArcadeHoverState::Flying;
 
+	UPROPERTY(Replicated)
+	bool bBoundaryReturnActive = false;
+
 	UPROPERTY(Transient)
 	TObjectPtr<UJetStatsComponent> CachedStatsComponent;
 
@@ -153,6 +172,15 @@ private:
 
 	UPROPERTY(Transient)
 	TObjectPtr<UQuickReversalComponent> CachedQuickReversalComponent;
+
+	UPROPERTY(Transient)
+	TObjectPtr<UBackwardDashComponent> CachedBackwardDashComponent;
+
+	UPROPERTY(Transient)
+	TObjectPtr<UForwardDashComponent> CachedForwardDashComponent;
+
+	UPROPERTY(Transient)
+	TObjectPtr<AFlightBoundsVolume> CachedFlightBounds;
 
 	FVector2D RawSteering = FVector2D::ZeroVector;
 	FVector2D SmoothedSteering = FVector2D::ZeroVector;
@@ -166,5 +194,9 @@ private:
 	FVector CurrentVelocity = FVector::ZeroVector;
 	float TimeSinceInputSent = 0.0f;
 	bool bLocalHoverEntryPending = false;
+	bool bAuthoritativeTeleportPending = false;
+	float BoundaryWarningAlpha = 0.0f;
+	float BoundaryTurnVisualInput = 0.0f;
+	FVector BoundaryReturnTarget = FVector::ZeroVector;
 	TArray<FBufferedFlightState> SnapshotBuffer;
 };

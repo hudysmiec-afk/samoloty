@@ -7,6 +7,8 @@
 class UCanvasPanel;
 class UCanvasPanelSlot;
 class UImage;
+class UProgressBar;
+class UTextBlock;
 class UTexture2D;
 
 enum class ERadarContactIcon : uint8
@@ -21,6 +23,14 @@ struct FRadarDisplayContact
 	FVector2D NormalizedPosition = FVector2D::ZeroVector;
 	ERadarContactIcon Icon = ERadarContactIcon::Level;
 	bool bSelected = false;
+};
+
+struct FDamageNumberDisplay
+{
+	FVector2D Position = FVector2D::ZeroVector;
+	FString Text;
+	float Opacity = 1.0f;
+	float Scale = 1.0f;
 };
 
 /** Local-only combat HUD. A Blueprint widget can derive from this class later. */
@@ -38,9 +48,16 @@ public:
 	void SetRadarContacts(bool bVisible, const TArray<FRadarDisplayContact>& Contacts);
 	void SetSelectedTargetIndicator(bool bHasTarget, bool bTargetOnScreen,
 		const FVector2D& WidgetPosition, const FVector2D& ScreenDirection,
-		const FVector2D& WidgetViewportSize);
+		const FVector2D& WidgetViewportSize, float DistanceCentimeters);
 	void SetAttackerDirections(const TArray<FVector2D>& ScreenDirections,
 		const FVector2D& WidgetViewportSize);
+	void SetDamageNumbers(const TArray<FDamageNumberDisplay>& DamageNumbers);
+	void SetPlayerStatus(float CurrentHealth, float MaxHealth,
+		float CurrentBoost, float MaxBoost, FName GunName,
+		float GunCooldownRemaining, float GunCooldownDuration,
+		FName MissileName, float MissileCooldownRemaining,
+		float MissileCooldownDuration);
+	void SetBoundaryWarning(float WarningAlpha, bool bAutomaticReturn);
 
 protected:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Flight HUD|Textures")
@@ -101,6 +118,13 @@ protected:
 	float SelectedTargetDirectionRadius = 0.30f;
 
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Flight HUD|Targeting|Layout",
+		meta=(ClampMin="1"))
+	float SelectedTargetDistanceFontSize = 22.0f;
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Flight HUD|Targeting|Layout")
+	FVector2D SelectedTargetDistanceOffset = FVector2D(0.0f, 48.0f);
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Flight HUD|Targeting|Layout",
 		meta=(ClampMin="0.05", ClampMax="0.48"))
 	float AttackerDirectionRadius = 0.23f;
 
@@ -127,8 +151,12 @@ protected:
 private:
 	void BuildNativeWidgetTree();
 	void BuildRadarWidgetTree();
+	void BuildStatusWidgetTree();
+	void UpdateWeaponCooldown(UProgressBar* Bar, UTextBlock* Text,
+		FName WeaponName, float Remaining, float Duration);
 	void EnsureRadarContactPool(int32 RequiredCount);
 	void EnsureAttackerDirectionPool(int32 RequiredCount);
+	void EnsureDamageNumberPool(int32 RequiredCount);
 	UTexture2D* GetRadarContactTexture(ERadarContactIcon Icon) const;
 
 	UPROPERTY(Transient)
@@ -156,13 +184,52 @@ private:
 	TObjectPtr<UCanvasPanelSlot> SelectedTargetDirectionSlot;
 
 	UPROPERTY(Transient)
+	TObjectPtr<UTextBlock> SelectedTargetDistanceText;
+
+	UPROPERTY(Transient)
+	TObjectPtr<UCanvasPanelSlot> SelectedTargetDistanceSlot;
+
+	UPROPERTY(Transient)
 	TArray<TObjectPtr<UImage>> AttackerDirectionImages;
 
 	UPROPERTY(Transient)
 	TArray<TObjectPtr<UCanvasPanelSlot>> AttackerDirectionSlots;
 
 	UPROPERTY(Transient)
+	TArray<TObjectPtr<UTextBlock>> DamageNumberTexts;
+
+	UPROPERTY(Transient)
+	TArray<TObjectPtr<UCanvasPanelSlot>> DamageNumberSlots;
+
+	UPROPERTY(Transient)
 	TObjectPtr<UCanvasPanel> RadarCanvas;
+
+	UPROPERTY(Transient)
+	TObjectPtr<UProgressBar> HealthBar;
+
+	UPROPERTY(Transient)
+	TObjectPtr<UTextBlock> HealthText;
+
+	UPROPERTY(Transient)
+	TObjectPtr<UProgressBar> BoostBar;
+
+	UPROPERTY(Transient)
+	TObjectPtr<UTextBlock> BoostText;
+
+	UPROPERTY(Transient)
+	TObjectPtr<UProgressBar> GunCooldownBar;
+
+	UPROPERTY(Transient)
+	TObjectPtr<UTextBlock> GunCooldownText;
+
+	UPROPERTY(Transient)
+	TObjectPtr<UProgressBar> MissileCooldownBar;
+
+	UPROPERTY(Transient)
+	TObjectPtr<UTextBlock> MissileCooldownText;
+
+	UPROPERTY(Transient)
+	TObjectPtr<UTextBlock> BoundaryWarningText;
 
 	UPROPERTY(Transient)
 	TObjectPtr<UImage> RadarSelectedImage;

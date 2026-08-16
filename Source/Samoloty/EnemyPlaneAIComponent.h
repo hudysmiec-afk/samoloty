@@ -2,10 +2,12 @@
 
 #include "CoreMinimal.h"
 #include "Components/ActorComponent.h"
+#include "EnemyAITypes.h"
 #include "EnemyPlaneAIComponent.generated.h"
 
 class APawn;
 class AController;
+class UAircraftCollisionComponent;
 class UDamageType;
 class UJetStatsComponent;
 class URifleGunComponent;
@@ -34,26 +36,6 @@ enum class EEnemyPlaneState : uint8
 	TurnBack
 };
 
-UENUM(BlueprintType)
-enum class EEnemyAggressionMode : uint8
-{
-	Aggressive UMETA(DisplayName="Aggressive"),
-	Defensive UMETA(DisplayName="Defensive - retaliates when attacked"),
-	DefensiveUntilLowHealth UMETA(DisplayName="Defensive until low health"),
-	Passive UMETA(DisplayName="Passive")
-};
-
-UENUM(BlueprintType)
-enum class EEnemyTargetPriority : uint8
-{
-	Closest UMETA(DisplayName="Closest"),
-	FirstAttacker UMETA(DisplayName="First acquired / attacker"),
-	LowestHealth UMETA(DisplayName="Lowest health"),
-	HighestHealth UMETA(DisplayName="Highest health"),
-	Random UMETA(DisplayName="Random"),
-	HighestAggro UMETA(DisplayName="Highest damage aggro")
-};
-
 UCLASS(ClassGroup=(Plane), meta=(BlueprintSpawnableComponent))
 class SAMOLOTY_API UEnemyPlaneAIComponent : public UActorComponent
 {
@@ -80,10 +62,10 @@ public:
 
 protected:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Enemy Plane|Roaming", meta=(ClampMin="100"))
-	float RoamRadius = 100000.0f;
+	float RoamRadius = 30000.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Enemy Plane|Roaming", meta=(ClampMin="100"))
-	float RoamAcceptanceRadius = 10000.0f;
+	float RoamAcceptanceRadius = 3000.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Enemy Plane|Targeting", meta=(ClampMin="100"))
 	float DetectionRange = 150000.0f;
@@ -208,6 +190,9 @@ private:
 
 	UPROPERTY(Transient)
 	TObjectPtr<UJetStatsComponent> JetStats;
+
+	UPROPERTY(Transient)
+	TObjectPtr<UAircraftCollisionComponent> AircraftCollision;
 
 	EEnemyPlaneState State = EEnemyPlaneState::Roaming;
 	FVector SpawnLocation = FVector::ZeroVector;

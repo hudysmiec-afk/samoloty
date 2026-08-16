@@ -176,6 +176,7 @@ void URocketWeaponComponent::FireSalvo()
 	}
 
 	const FRocketBarrageStats& Stats = StatsComponent->GetRocketBarrageStats();
+	PrepareSalvo(Stats);
 	const int32 RocketCount = FMath::Max(1, Stats.RocketsPerSalvo);
 	const int32 LeftCount = (RocketCount + 1) / 2;
 	const int32 RightCount = RocketCount / 2;
@@ -269,6 +270,7 @@ void URocketWeaponComponent::SpawnRocket(USceneComponent* SpawnPoint, const bool
 	Data.ServerStartTime = GetWorld()->GetTimeSeconds();
 	Data.GuidanceMode = ERocketGuidanceMode::Straight;
 	Data.bDrawDebug = bDrawRocketDebug;
+	ConfigureRocketLaunchData(Data, SeparationPath, RandomStream);
 
 	const FVector InitialDirection =
 		(SeparationPath.ControlPoint1 - SeparationPath.StartLocation).GetSafeNormal(
@@ -284,6 +286,28 @@ void URocketWeaponComponent::SpawnRocket(USceneComponent* SpawnPoint, const bool
 		Rocket->FinishSpawning(SpawnTransform);
 		ActiveOwnedRockets.Add(Rocket);
 		ActiveOwnedRocketCount = ActiveOwnedRockets.Num();
+	}
+}
+
+void URocketWeaponComponent::PrepareSalvo(const FRocketBarrageStats& Stats)
+{
+}
+
+void URocketWeaponComponent::ConfigureRocketLaunchData(FRocketLaunchData& LaunchData,
+	const FRocketSeparationPath& SeparationPath, FRandomStream& RandomStream) const
+{
+}
+
+void URocketWeaponComponent::InheritMissingPresentationFrom(
+	const URocketWeaponComponent& Source)
+{
+	if (RocketClass == ARocketProjectile::StaticClass())
+	{
+		RocketClass = Source.RocketClass;
+	}
+	if (!RocketLaunchSound)
+	{
+		RocketLaunchSound = Source.RocketLaunchSound;
 	}
 }
 
@@ -327,9 +351,11 @@ void URocketWeaponComponent::DrawWeaponDebug() const
 	const TCHAR* StateText = WeaponState == ERocketWeaponState::Ready ? TEXT("READY")
 		: WeaponState == ERocketWeaponState::FiringSalvos ? TEXT("FIRING") : TEXT("COOLDOWN");
 	const float Remaining = FMath::Max(0.0f, static_cast<float>(NextActionServerTime - GetServerTimeSeconds()));
+	const FString WeaponName = GetWeaponDisplayName().ToString().ToUpper();
 	const FString Message = FString::Printf(
-		TEXT("HP: %.0f / %.0f\nROCKET BARRAGE [%s]\nSalvos: %d / %d | Next: %.2fs\nFire held: %s\nActive owned: %d | Server active: %d"),
-		Health->GetCurrentHealth(), Health->GetMaxHealth(), StateText, SalvosFired, Stats.SalvoCount,
+		TEXT("HP: %.0f / %.0f\n%s [%s]\nSalvos: %d / %d | Next: %.2fs\nFire held: %s\nActive owned: %d | Server active: %d"),
+		Health->GetCurrentHealth(), Health->GetMaxHealth(), *WeaponName, StateText,
+		SalvosFired, Stats.SalvoCount,
 		Remaining, bLocalFireHeld ? TEXT("YES") : TEXT("NO"), ActiveOwnedRocketCount,
 		ServerActiveRocketCountForDebug);
 	GEngine->AddOnScreenDebugMessage(static_cast<uint64>(GetUniqueID()), 0.0f, FColor::Yellow, Message);
@@ -343,4 +369,16 @@ void URocketWeaponComponent::GetLifetimeReplicatedProps(TArray<FLifetimeProperty
 	DOREPLIFETIME_CONDITION(URocketWeaponComponent, NextActionServerTime, COND_OwnerOnly);
 	DOREPLIFETIME_CONDITION(URocketWeaponComponent, ActiveOwnedRocketCount, COND_OwnerOnly);
 	DOREPLIFETIME_CONDITION(URocketWeaponComponent, ServerActiveRocketCountForDebug, COND_OwnerOnly);
+}
+bool URocketWeaponComponent::GetCooldownStatus(float& OutRemainingSeconds,
+	float& OutDurationSeconds) const
+{
+	const UJetStatsComponent* Stats = GetOwner()
+		? GetOwner()->FindComponentByClass<UJetStatsComponent>() : nullptr;
+	OutDurationSeconds = Stats ? Stats->GetRocketBarrageStats().Cooldown : 0.0f;
+	OutRemainingSeconds = WeaponState == ERocketWeaponState::Cooldown
+		? FMath::Clamp(static_cast<float>(NextActionServerTime - GetServerTimeSeconds()),
+			0.0f, OutDurationSeconds)
+		: 0.0f;
+	return OutDurationSeconds > UE_SMALL_NUMBER;
 }

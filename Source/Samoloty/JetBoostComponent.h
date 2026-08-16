@@ -5,7 +5,9 @@
 #include "JetBoostComponent.generated.h"
 
 class UJetStatsComponent;
+class UBackwardDashComponent;
 class UQuickReversalComponent;
+class UForwardDashComponent;
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FBoostStateChangedSignature, bool, bIsBoosting);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FBoostEnergyChangedSignature, float, CurrentEnergy, float, MaxEnergy);
@@ -72,4 +74,10 @@ private:
 
 	UPROPERTY(Transient)
 	TObjectPtr<UQuickReversalComponent> CachedQuickReversalComponent;
+
+	UPROPERTY(Transient)
+	TObjectPtr<UBackwardDashComponent> CachedBackwardDashComponent;
+
+	UPROPERTY(Transient)
+	TObjectPtr<UForwardDashComponent> CachedForwardDashComponent;
 };

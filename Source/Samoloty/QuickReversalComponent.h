@@ -5,8 +5,11 @@
 #include "QuickReversalComponent.generated.h"
 
 class UArcadeFlightComponent;
+class UBackwardDashComponent;
 class UEvasiveRollComponent;
+class UForwardDashComponent;
 class UHealthComponent;
+class USoundBase;
 
 UENUM(BlueprintType)
 enum class EQuickReversalDirection : uint8
@@ -38,10 +41,9 @@ struct FQuickReversalNetworkState
 };
 
 /**
- * Server-authoritative mobility skill that performs a fast horizontal reversal.
- * Normal steering and lateral movement remain available while the maneuver
- * performs the reversal. Weapon fire stays blocked until the maneuver camera
- * has completed its turn.
+ * Server-authoritative mobility skill that reverses the aircraft through one
+ * continuous forward arc. Rotation, displacement, engine cut and exit thrust
+ * all use the same synchronized maneuver progress.
  */
 UCLASS(ClassGroup=(Plane), meta=(BlueprintSpawnableComponent))
 class SAMOLOTY_API UQuickReversalComponent : public UActorComponent
@@ -56,8 +58,9 @@ public:
 
 	/** Requests the skill. Negative direction turns left; zero or positive turns right. */
 	void RequestActivation(float PreferredDirection);
+	bool TryActivateFromAbilityQueue(float PreferredDirection);
 
-	/** Absolute 3D flight-root rotation for the active maneuver. */
+	/** Absolute 3D flight-root rotation along the active forward arc. */
 	bool GetAuthoritativeFlightRotation(FQuat& OutRotation) const;
 
 	/**
@@ -88,7 +91,7 @@ public:
 	/** Returns -1 for a left reversal and +1 for a right reversal. */
 	float GetDirectionSign() const;
 
-	/** Local visual rotation that performs the nose-down half-loop in full 3D. */
+	/** Corrects snapshot interpolation to the synchronized maneuver orientation. */
 	FQuat GetPresentationRelativeRotation(const FQuat& FlightRootRotation) const;
 
 	/** Local up axis captured when the maneuver starts, used by its camera path. */
@@ -100,7 +103,7 @@ public:
 	/** Visual-only afterburner alpha. It never consumes normal boost energy. */
 	float GetSkillBoostAlpha() const;
 
-	/** Restores regular turn/strafe bank after the nose-down part is complete. */
+	/** Restores regular turn/strafe bank after the nose-up part is complete. */
 	float GetFlightBankBlendAlpha() const;
 
 private:
@@ -113,8 +116,13 @@ private:
 	UFUNCTION()
 	void OnRep_ReversalState();
 
+	UFUNCTION(NetMulticast, Unreliable)
+	void MulticastPlayQuickReversalSound();
+
 	bool CanActivate() const;
 	void StartAuthoritativeReversal(EQuickReversalDirection Direction);
+	FQuat BuildManeuverWorldRotation(float Progress) const;
+	FVector BuildManeuverArcOffset(float Progress) const;
 	double GetSynchronizedTime() const;
 	double GetLocalTime() const;
 
@@ -128,13 +136,25 @@ private:
 	TObjectPtr<UEvasiveRollComponent> CachedEvasiveRollComponent;
 
 	UPROPERTY(Transient)
+	TObjectPtr<UBackwardDashComponent> CachedBackwardDashComponent;
+
+	UPROPERTY(Transient)
+	TObjectPtr<UForwardDashComponent> CachedForwardDashComponent;
+
+	UPROPERTY(Transient)
 	TObjectPtr<UHealthComponent> CachedHealthComponent;
+
+	/** Spatial one-shot attached to the aircraft when the reversal starts. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Plane|Mobility|Quick Reversal|Effects",
+		meta=(AllowPrivateAccess="true"))
+	TObjectPtr<USoundBase> QuickReversalSound;
 
 	double NextAllowedServerTime = 0.0;
 	double LocalNextAllowedTime = 0.0;
 	bool bLocalActivationPending = false;
 	FVector InitialForwardVelocity = FVector::ZeroVector;
 	FVector CurrentLateralVelocity = FVector::ZeroVector;
+	FVector PreviousArcOffset = FVector::ZeroVector;
 	FQuat InitialFlightRotation = FQuat::Identity;
 	FQuat TargetFlightRotation = FQuat::Identity;
 };

@@ -2,6 +2,7 @@
 
 #include "EvasiveRollComponent.h"
 #include "HealthComponent.h"
+#include "MissileWarningComponent.h"
 #include "Components/SceneComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "DrawDebugHelpers.h"
@@ -105,6 +106,12 @@ void ARocketProjectile::ApplyLaunchState()
 	CurrentHomingDirection = Direction.GetSafeNormal(SMALL_NUMBER, FVector(LaunchData.Direction));
 	SetActorLocationAndRotation(Location, Direction.Rotation(), false, nullptr,
 		ETeleportType::TeleportPhysics);
+	RefreshMissileWarningRegistration();
+}
+
+void ARocketProjectile::OnRep_HomingDisabled()
+{
+	RefreshMissileWarningRegistration();
 }
 
 void ARocketProjectile::Tick(const float DeltaSeconds)
@@ -505,7 +512,42 @@ void ARocketProjectile::BreakHomingAfterEvade(AActor* EvadingActor)
 	// Only the missile which has actually reached the protected aircraft loses
 	// guidance. Other missiles keep tracking regardless of how far away they are.
 	bHomingDisabled = true;
+	RefreshMissileWarningRegistration();
 	ForceNetUpdate();
+}
+
+void ARocketProjectile::RefreshMissileWarningRegistration()
+{
+	AActor* DesiredTarget = !bExploded && !bHomingDisabled
+		&& LaunchData.GuidanceMode == ERocketGuidanceMode::Homing
+		? LaunchData.HomingTarget.Get() : nullptr;
+	if (RegisteredWarningTarget.Get() == DesiredTarget)
+	{
+		return;
+	}
+	ClearMissileWarningRegistration();
+	if (DesiredTarget)
+	{
+		if (UMissileWarningComponent* Warning =
+			DesiredTarget->FindComponentByClass<UMissileWarningComponent>())
+		{
+			Warning->AddIncomingMissile(this);
+			RegisteredWarningTarget = DesiredTarget;
+		}
+	}
+}
+
+void ARocketProjectile::ClearMissileWarningRegistration()
+{
+	if (AActor* PreviousTarget = RegisteredWarningTarget.Get())
+	{
+		if (UMissileWarningComponent* Warning =
+			PreviousTarget->FindComponentByClass<UMissileWarningComponent>())
+		{
+			Warning->RemoveIncomingMissile(this);
+		}
+	}
+	RegisteredWarningTarget.Reset();
 }
 
 void ARocketProjectile::Explode(AActor* DamageTarget, const FVector& ImpactLocation)
@@ -516,6 +558,7 @@ void ARocketProjectile::Explode(AActor* DamageTarget, const FVector& ImpactLocat
 	}
 
 	bExploded = true;
+	ClearMissileWarningRegistration();
 	ExplosionLocation = ImpactLocation;
 	SetActorLocation(ImpactLocation);
 	if (DamageTarget)
@@ -531,6 +574,7 @@ void ARocketProjectile::OnRep_Exploded()
 {
 	if (bExploded)
 	{
+		ClearMissileWarningRegistration();
 		SetActorLocation(ExplosionLocation);
 		PlayExplosionCosmetics();
 	}
@@ -568,6 +612,7 @@ void ARocketProjectile::PlayExplosionCosmetics()
 
 void ARocketProjectile::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
+	ClearMissileWarningRegistration();
 	OnRocketFinished.Broadcast(this);
 	if (bCountedOnServer)
 	{

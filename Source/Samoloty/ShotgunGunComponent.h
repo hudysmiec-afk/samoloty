@@ -22,6 +22,8 @@ public:
 	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
 
 	virtual void SetFireHeld(bool bHeld) override;
+	virtual bool GetCooldownStatus(float& OutRemainingSeconds,
+		float& OutDurationSeconds) const override;
 	virtual void SetAimContext(const FVector& AimOrigin, const FVector& AimDirection) override;
 	virtual void SetFirePoints(USceneComponent* LeftPoint, USceneComponent* RightPoint) override;
 
@@ -77,6 +79,8 @@ private:
 	int32 BuildPelletPaths(bool bApplyDamage, int32 ShotSeed,
 		TArray<FVector_NetQuantize>& OutPelletEnds, TArray<uint8>& OutHitFlags) const;
 	void PlayBlastVisual(const TArray<FVector_NetQuantize>& PelletEnds,
+		const TArray<uint8>& HitFlags, uint8 MuzzleIndex) const;
+	void PlayBlastImpacts(const TArray<FVector_NetQuantize>& PelletEnds,
 		const TArray<uint8>& HitFlags, uint8 MuzzleIndex) const;
 	USceneComponent* GetMuzzle(uint8 MuzzleIndex) const;
 	void DrawShotgunDebug() const;

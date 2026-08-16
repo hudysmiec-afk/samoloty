@@ -39,6 +39,10 @@ public:
 	UFUNCTION(BlueprintPure, Category="Plane|Weapons")
 	bool IsWeaponEquipped() const { return bWeaponEquipped; }
 
+	/** Common HUD contract. Remaining zero means the weapon is ready. */
+	virtual bool GetCooldownStatus(float& OutRemainingSeconds,
+		float& OutDurationSeconds) const;
+
 protected:
 	virtual void OnWeaponEquippedChanged();
 	/** Shared local/server gate for mobility states in which weapon fire is invalid. */

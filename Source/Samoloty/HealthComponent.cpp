@@ -1,11 +1,14 @@
 #include "HealthComponent.h"
 
+#include "ArcadeFlightGameMode.h"
 #include "EvasiveRollComponent.h"
 #include "JetStatsComponent.h"
 #include "RocketProjectile.h"
 #include "GameFramework/Actor.h"
 #include "GameFramework/Controller.h"
+#include "GameFramework/GameModeBase.h"
 #include "GameFramework/Pawn.h"
+#include "Kismet/GameplayStatics.h"
 #include "Net/UnrealNetwork.h"
 
 UHealthComponent::UHealthComponent()
@@ -47,7 +50,9 @@ void UHealthComponent::HandleAnyDamage(AActor* DamagedActor, const float Damage,
 		}
 	}
 
+	const float PreviousHealth = CurrentHealth;
 	CurrentHealth = FMath::Max(0.0f, CurrentHealth - Damage);
+	const float AppliedDamage = PreviousHealth - CurrentHealth;
 	OnHealthChanged.Broadcast(CurrentHealth, GetMaxHealth());
 	AActor* AttackerActor = InstigatedBy ? InstigatedBy->GetPawn() : nullptr;
 	if (!AttackerActor && DamageCauser)
@@ -61,11 +66,32 @@ void UHealthComponent::HandleAnyDamage(AActor* DamagedActor, const float Damage,
 	if (AttackerActor && AttackerActor != GetOwner())
 	{
 		ClientNotifyDamageReceived(AttackerActor);
+		APawn* AttackerPawn = Cast<APawn>(AttackerActor);
+		if (AttackerPawn && AttackerPawn->IsPlayerControlled())
+		{
+			if (UHealthComponent* AttackerHealth =
+				AttackerPawn->FindComponentByClass<UHealthComponent>())
+			{
+				FVector DamageCenter = GetOwner()->GetActorLocation();
+				FVector DamageExtent = FVector::ZeroVector;
+				GetOwner()->GetActorBounds(true, DamageCenter, DamageExtent);
+				AttackerHealth->ClientNotifyDamageDealt(
+					GetOwner(), AppliedDamage, DamageCenter);
+			}
+		}
 	}
 	if (CurrentHealth <= KINDA_SMALL_NUMBER)
 	{
 		bIsDead = true;
 		OnHealthDepleted.Broadcast();
+		if (APawn* DeadPawn = Cast<APawn>(GetOwner()); DeadPawn && DeadPawn->IsPlayerControlled())
+		{
+			if (AArcadeFlightGameMode* FlightGameMode =
+				Cast<AArcadeFlightGameMode>(UGameplayStatics::GetGameMode(this)))
+			{
+				FlightGameMode->SchedulePlayerRespawn(DeadPawn->GetController());
+			}
+		}
 		GetOwner()->Destroy();
 	}
 }
@@ -75,6 +101,15 @@ void UHealthComponent::ClientNotifyDamageReceived_Implementation(AActor* Attacke
 	if (IsValid(AttackerActor))
 	{
 		OnDamageReceived.Broadcast(AttackerActor);
+	}
+}
+
+void UHealthComponent::ClientNotifyDamageDealt_Implementation(
+	AActor* DamagedActor, const float Damage, const FVector_NetQuantize WorldLocation)
+{
+	if (Damage > 0.0f)
+	{
+		OnDamageDealt.Broadcast(DamagedActor, Damage, WorldLocation);
 	}
 }
 

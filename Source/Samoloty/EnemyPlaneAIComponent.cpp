@@ -1,5 +1,6 @@
 #include "EnemyPlaneAIComponent.h"
 
+#include "AircraftCollisionComponent.h"
 #include "HealthComponent.h"
 #include "JetStatsComponent.h"
 #include "RifleGunComponent.h"
@@ -69,8 +70,13 @@ UEnemyPlaneAIComponent::UEnemyPlaneAIComponent()
 void UEnemyPlaneAIComponent::BeginPlay()
 {
 	Super::BeginPlay();
+	// Existing Blueprint instances may retain the old one-kilometre patrol default.
+	// Keep prototype enemies within 300 m of their placed spawn point.
+	RoamRadius = FMath::Min(RoamRadius, 30000.0f);
+	RoamAcceptanceRadius = FMath::Min(RoamAcceptanceRadius, 3000.0f);
 	RifleGun = GetOwner()->FindComponentByClass<URifleGunComponent>();
 	JetStats = GetOwner()->FindComponentByClass<UJetStatsComponent>();
+	AircraftCollision = GetOwner()->FindComponentByClass<UAircraftCollisionComponent>();
 	SpawnLocation = GetOwner()->GetActorLocation();
 	ManeuverDirection = GetOwner()->GetActorForwardVector().GetSafeNormal();
 	DesiredFlightDirection = ManeuverDirection;
@@ -128,9 +134,15 @@ void UEnemyPlaneAIComponent::TickComponent(const float DeltaTime, const ELevelTi
 	}
 	TurnTowardDesiredDirection(DeltaTime);
 
-	FHitResult MoveHit;
-	GetOwner()->AddActorWorldOffset(
-		GetOwner()->GetActorForwardVector() * GetForwardSpeed() * DeltaTime, true, &MoveHit);
+	const FVector RequestedVelocity = GetOwner()->GetActorForwardVector() * GetForwardSpeed();
+	if (AircraftCollision)
+	{
+		AircraftCollision->MoveOwner(RequestedVelocity * DeltaTime, RequestedVelocity);
+	}
+	else
+	{
+		GetOwner()->AddActorWorldOffset(RequestedVelocity * DeltaTime, false);
+	}
 
 	UpdateStateTransitions();
 	UpdateWeapon();

@@ -1,6 +1,7 @@
 #include "TargetSelectionComponent.h"
 
 #include "RadarComponent.h"
+#include "PlaneTargetingUtils.h"
 #include "Engine/Engine.h"
 #include "Engine/World.h"
 #include "GameFramework/Controller.h"
@@ -10,7 +11,7 @@
 UTargetSelectionComponent::UTargetSelectionComponent()
 {
 	PrimaryComponentTick.bCanEverTick = true;
-	SetIsReplicatedByDefault(false);
+	SetIsReplicatedByDefault(true);
 }
 
 void UTargetSelectionComponent::TickComponent(const float DeltaTime, const ELevelTick TickType,
@@ -119,7 +120,26 @@ void UTargetSelectionComponent::SetSelectedTarget(AActor* NewTarget)
 		return;
 	}
 	SelectedTarget = NewTarget;
+	if (GetOwner() && GetOwner()->HasAuthority())
+	{
+		ServerSelectedTarget = NewTarget;
+	}
+	else
+	{
+		ServerSetSelectedTarget(NewTarget);
+	}
 	OnSelectedTargetChanged.Broadcast(PreviousTarget, NewTarget);
+}
+
+void UTargetSelectionComponent::ServerSetSelectedTarget_Implementation(AActor* NewTarget)
+{
+	ServerSelectedTarget = NewTarget;
+}
+
+AActor* UTargetSelectionComponent::GetSelectedTargetForAimAssist() const
+{
+	return GetOwner() && GetOwner()->HasAuthority()
+		? ServerSelectedTarget.Get() : SelectedTarget.Get();
 }
 
 bool UTargetSelectionComponent::IsSelectable(const AActor* Candidate, const double Now) const
@@ -150,7 +170,7 @@ bool UTargetSelectionComponent::IsUnderCrosshair(const AActor* Candidate,
 
 	FVector TargetCenter;
 	FVector TargetExtent;
-	Candidate->GetActorBounds(true, TargetCenter, TargetExtent);
+	PlaneTargeting::GetTargetBounds(Candidate, TargetCenter, TargetExtent);
 	const FVector ToTarget = TargetCenter - ViewLocation;
 	const float Distance = ToTarget.Size();
 	if (Distance <= KINDA_SMALL_NUMBER)

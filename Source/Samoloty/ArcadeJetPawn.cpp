@@ -1,13 +1,21 @@
 #include "ArcadeJetPawn.h"
 
+#include "AircraftCollisionComponent.h"
 #include "ArcadeFlightComponent.h"
+#include "BackwardDashComponent.h"
+#include "BlinkComponent.h"
 #include "EvasiveRollComponent.h"
+#include "ForwardDashComponent.h"
+#include "GunAimAssistComponent.h"
+#include "GroundBarrageWeaponComponent.h"
 #include "HealthComponent.h"
 #include "HomingMissileWeaponComponent.h"
 #include "JetBoostComponent.h"
 #include "JetEngineAudioComponent.h"
 #include "JetStatsComponent.h"
 #include "MissileTargetingComponent.h"
+#include "MissileWarningComponent.h"
+#include "PlaneAbilityQueueComponent.h"
 #include "QuickReversalComponent.h"
 #include "RadarComponent.h"
 #include "RocketWeaponComponent.h"
@@ -17,8 +25,10 @@
 #include "WeaponSystemComponent.h"
 #include "Camera/CameraComponent.h"
 #include "Components/BoxComponent.h"
+#include "Components/CapsuleComponent.h"
 #include "Components/InputComponent.h"
 #include "Components/SceneComponent.h"
+#include "Components/SkeletalMeshComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "Engine/World.h"
 #include "GameFramework/PlayerController.h"
@@ -35,6 +45,8 @@ namespace ArcadeJetCameraTuning
 	constexpr float FieldOfView = 105.0f;
 	constexpr float NormalFollowResponse = 3.0f;
 	constexpr float BoostFollowResponse = 4.0f;
+	constexpr float BackwardDashFollowResponse = 10.0f;
+	constexpr float BlinkRecoveryFollowResponse = 14.0f;
 	constexpr float HoverFollowResponse = 8.0f;
 	constexpr float TeleportSnapDistance = 12000.0f;
 	constexpr float ReversalCameraDelayFraction = 0.55f;
@@ -42,6 +54,11 @@ namespace ArcadeJetCameraTuning
 	constexpr float ReversalCameraLookAcquireEnd = 0.28f;
 	constexpr float ReversalCameraPullBack = 450.0f;
 	constexpr float ReversalCameraLift = 170.0f;
+	constexpr float RearViewMouseSensitivity = 3.0f;
+	constexpr float RearViewMaxPitch = 80.0f;
+	constexpr float RearViewMinDistance = 600.0f;
+	constexpr float RearViewMaxDistance = 3000.0f;
+	constexpr float RearViewZoomStep = 180.0f;
 }
 
 namespace ArcadeJetPresentationTuning
@@ -75,13 +92,31 @@ AArcadeJetPawn::AArcadeJetPawn()
 	VisualRoot->SetRelativeLocation(
 		FVector(0.0f, 0.0f, -ArcadeJetPresentationTuning::EvasiveRollPivotHeight));
 
-	Collision = CreateDefaultSubobject<UBoxComponent>(TEXT("Collision"));
-	Collision->InitBoxExtent(FVector(240.0f, 110.0f, 60.0f));
-	Collision->SetCollisionProfileName(FName(TEXT("PlanePawn")));
-	Collision->SetupAttachment(VisualRoot);
+	MovementCollision = CreateDefaultSubobject<UCapsuleComponent>(TEXT("MovementCollision"));
+	MovementCollision->InitCapsuleSize(55.0f, 220.0f);
+	MovementCollision->SetupAttachment(VirtualFlightRoot);
+	// Unreal capsules point along local Z; pitch them so the long axis follows plane X.
+	MovementCollision->SetRelativeRotation(FRotator(90.0f, 0.0f, 0.0f));
+
+	BodyHitbox = CreateDefaultSubobject<UBoxComponent>(TEXT("BodyHitbox"));
+	BodyHitbox->InitBoxExtent(FVector(240.0f, 48.0f, 45.0f));
+	BodyHitbox->SetupAttachment(VisualRoot);
+	LeftWingHitbox = CreateDefaultSubobject<UBoxComponent>(TEXT("LeftWingHitbox"));
+	LeftWingHitbox->InitBoxExtent(FVector(115.0f, 75.0f, 18.0f));
+	LeftWingHitbox->SetupAttachment(VisualRoot);
+	LeftWingHitbox->SetRelativeLocation(FVector(0.0f, -115.0f, 0.0f));
+	RightWingHitbox = CreateDefaultSubobject<UBoxComponent>(TEXT("RightWingHitbox"));
+	RightWingHitbox->InitBoxExtent(FVector(115.0f, 75.0f, 18.0f));
+	RightWingHitbox->SetupAttachment(VisualRoot);
+	RightWingHitbox->SetRelativeLocation(FVector(0.0f, 115.0f, 0.0f));
+	AircraftCollision = CreateDefaultSubobject<UAircraftCollisionComponent>(TEXT("AircraftCollision"));
+	UAircraftCollisionComponent::ConfigureDamageHitbox(BodyHitbox);
+	UAircraftCollisionComponent::ConfigureDamageHitbox(LeftWingHitbox);
+	UAircraftCollisionComponent::ConfigureDamageHitbox(RightWingHitbox);
 
 	PlaneMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("PlaneMesh"));
 	PlaneMesh->SetupAttachment(VisualRoot);
+	PlaneMesh->SetAbsolute(false, false, false);
 	PlaneMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 
 	JetStats = CreateDefaultSubobject<UJetStatsComponent>(TEXT("JetStats"));
@@ -90,11 +125,19 @@ AArcadeJetPawn::AArcadeJetPawn()
 	JetEngineAudio = CreateDefaultSubobject<UJetEngineAudioComponent>(TEXT("JetEngineAudio"));
 	EvasiveRoll = CreateDefaultSubobject<UEvasiveRollComponent>(TEXT("EvasiveRoll"));
 	QuickReversal = CreateDefaultSubobject<UQuickReversalComponent>(TEXT("QuickReversal"));
+	BackwardDash = CreateDefaultSubobject<UBackwardDashComponent>(TEXT("BackwardDash"));
+	ForwardDash = CreateDefaultSubobject<UForwardDashComponent>(TEXT("ForwardDash"));
+	Blink = CreateDefaultSubobject<UBlinkComponent>(TEXT("Blink"));
+	AbilityQueue = CreateDefaultSubobject<UPlaneAbilityQueueComponent>(TEXT("AbilityQueue"));
+	GunAimAssist = CreateDefaultSubobject<UGunAimAssistComponent>(TEXT("GunAimAssist"));
 	FlightMovement = CreateDefaultSubobject<UArcadeFlightComponent>(TEXT("FlightMovement"));
 	RocketWeapon = CreateDefaultSubobject<URocketWeaponComponent>(TEXT("RocketWeapon"));
+	GroundBarrageWeapon = CreateDefaultSubobject<UGroundBarrageWeaponComponent>(
+		TEXT("RocketWeaponGroundBarrage"));
 	Radar = CreateDefaultSubobject<URadarComponent>(TEXT("Radar"));
 	TargetSelection = CreateDefaultSubobject<UTargetSelectionComponent>(TEXT("TargetSelection"));
 	MissileTargeting = CreateDefaultSubobject<UMissileTargetingComponent>(TEXT("MissileTargeting"));
+	MissileWarning = CreateDefaultSubobject<UMissileWarningComponent>(TEXT("MissileWarning"));
 	HomingMissileWeapon = CreateDefaultSubobject<UHomingMissileWeaponComponent>(TEXT("RocketWeaponHoming"));
 	RifleGun = CreateDefaultSubobject<URifleGunComponent>(TEXT("RifleGun"));
 	ShotgunGun = CreateDefaultSubobject<UShotgunGunComponent>(TEXT("ShotgunGun"));
@@ -135,6 +178,34 @@ AArcadeJetPawn::AArcadeJetPawn()
 void AArcadeJetPawn::BeginPlay()
 {
 	Super::BeginPlay();
+	// Existing Blueprint instances can retain the former Collision parent or an
+	// absolute rotation override after the native component hierarchy changes.
+	// Force the aircraft model back into the complete visual assembly so bank,
+	// strafe presentation and evasive roll affect mesh and weapon origins together.
+	if (PlaneMesh && VisualRoot)
+	{
+		PlaneMesh->AttachToComponent(VisualRoot,
+			FAttachmentTransformRules::KeepRelativeTransform);
+		PlaneMesh->SetAbsolute(false, false, false);
+	}
+	// BP_PlayerPlane uses a Blueprint-added SkeletalMesh (sk_Jet) as its real
+	// visible aircraft. Native hierarchy migrations do not automatically reparent
+	// Blueprint-added components, so move that visual branch beside the muzzles.
+	if (VisualRoot)
+	{
+		TInlineComponentArray<USkeletalMeshComponent*> SkeletalMeshes(this);
+		for (USkeletalMeshComponent* SkeletalMesh : SkeletalMeshes)
+		{
+			if (!SkeletalMesh)
+			{
+				continue;
+			}
+			SkeletalMesh->AttachToComponent(VisualRoot,
+				FAttachmentTransformRules::KeepWorldTransform);
+			SkeletalMesh->SetAbsolute(false, false, false);
+		}
+	}
+	AircraftCollision->SetMovementCapsule(MovementCollision);
 	WeaponSystem->ConfigureFirePoints(EWeaponSlot::Gun, GunMuzzleLeft, GunMuzzleRight);
 	WeaponSystem->ConfigureFirePoints(EWeaponSlot::Missile, RocketSpawnLeft, RocketSpawnRight);
 	EvasiveRollPivot->SetRelativeLocationAndRotation(
@@ -212,40 +283,12 @@ void AArcadeJetPawn::ApplyVisualRotation()
 	}
 }
 
-FVector AArcadeJetPawn::MovePlaneWithCollision(const FVector& RequestedMove)
+FVector AArcadeJetPawn::MovePlaneWithCollision(const FVector& RequestedMove,
+	const FVector& RequestedVelocity, const bool bEnableImpactResponse)
 {
-	if (RequestedMove.IsNearlyZero())
-	{
-		return FVector::ZeroVector;
-	}
-
-	if (!Collision || !GetWorld())
-	{
-		AddActorWorldOffset(RequestedMove, false, nullptr, ETeleportType::None);
-		return RequestedMove;
-	}
-
-	FHitResult Hit;
-	const FCollisionShape Shape = FCollisionShape::MakeBox(Collision->GetScaledBoxExtent());
-	FCollisionQueryParams QueryParams(SCENE_QUERY_STAT(PlaneMovementCollision), false, this);
-	QueryParams.AddIgnoredActor(this);
-	const FVector SweepStart = Collision->GetComponentLocation();
-	const bool bHit = GetWorld()->SweepSingleByProfile(
-		Hit,
-		SweepStart,
-		SweepStart + RequestedMove,
-		Collision->GetComponentQuat(),
-		Collision->GetCollisionProfileName(),
-		Shape,
-		QueryParams);
-
-	const float MoveAlpha = bHit
-		? FMath::Clamp(Hit.Time - 0.001f, 0.0f, 1.0f)
-		: 1.0f;
-	const FVector AppliedMove = RequestedMove * MoveAlpha;
-	AddActorWorldOffset(AppliedMove, false, nullptr, ETeleportType::None);
-	Collision->UpdateOverlaps();
-	return AppliedMove;
+	return AircraftCollision
+		? AircraftCollision->MoveOwner(RequestedMove, RequestedVelocity, bEnableImpactResponse)
+		: RequestedVelocity;
 }
 
 void AArcadeJetPawn::SetupPlayerInputComponent(UInputComponent* PlayerInputComponent)
@@ -259,6 +302,12 @@ void AArcadeJetPawn::SetupPlayerInputComponent(UInputComponent* PlayerInputCompo
 		this, &AArcadeJetPawn::RegisterRightRollTap);
 	PlayerInputComponent->BindAction(TEXT("PlaneQuickReversal"), IE_Pressed,
 		this, &AArcadeJetPawn::ActivateQuickReversal);
+	PlayerInputComponent->BindAction(TEXT("PlaneBackwardDash"), IE_Pressed,
+		this, &AArcadeJetPawn::ActivateBackwardDash);
+	PlayerInputComponent->BindAction(TEXT("PlaneForwardDash"), IE_Pressed,
+		this, &AArcadeJetPawn::ActivateForwardDash);
+	PlayerInputComponent->BindAction(TEXT("PlaneBlink"), IE_Pressed,
+		this, &AArcadeJetPawn::ActivateBlink);
 	PlayerInputComponent->BindAxis(TEXT("PlaneBrake"), this, &AArcadeJetPawn::SetBrake);
 	PlayerInputComponent->BindAxis(TEXT("PlaneHoverZoom"), this, &AArcadeJetPawn::SetHoverCameraZoom);
 	PlayerInputComponent->BindAxis(TEXT("PlaneMouseX"), this, &AArcadeJetPawn::AddHoverCameraYawInput);
@@ -266,6 +315,10 @@ void AArcadeJetPawn::SetupPlayerInputComponent(UInputComponent* PlayerInputCompo
 	PlayerInputComponent->BindAction(TEXT("PlaneBoost"), IE_Pressed, this, &AArcadeJetPawn::StartBoost);
 	PlayerInputComponent->BindAction(TEXT("PlaneBoost"), IE_Released, this, &AArcadeJetPawn::StopBoost);
 	PlayerInputComponent->BindAction(TEXT("PlaneHover"), IE_Pressed, this, &AArcadeJetPawn::ToggleHover);
+	PlayerInputComponent->BindAction(TEXT("PlaneRearView"), IE_Pressed,
+		this, &AArcadeJetPawn::BeginRearView);
+	PlayerInputComponent->BindAction(TEXT("PlaneRearView"), IE_Released,
+		this, &AArcadeJetPawn::EndRearView);
 	PlayerInputComponent->BindAction(TEXT("PlaneMissileFire"), IE_Pressed, this, &AArcadeJetPawn::StartMissileFire);
 	PlayerInputComponent->BindAction(TEXT("PlaneMissileFire"), IE_Released, this, &AArcadeJetPawn::StopMissileFire);
 	PlayerInputComponent->BindAction(TEXT("PlaneGunFire"), IE_Pressed, this, &AArcadeJetPawn::StartGunFire);
@@ -286,6 +339,12 @@ void AArcadeJetPawn::Tick(const float DeltaSeconds)
 		if (bHoverCameraOrbitHeld && FlightMovement->GetHoverState() != EArcadeHoverState::Hovering)
 		{
 			EndHoverCameraOrbit();
+		}
+		if ((bRearViewHeld || bRearViewOrbitHeld)
+			&& FlightMovement->GetHoverState() != EArcadeHoverState::Flying)
+		{
+			EndRearView();
+			EndRearViewOrbit();
 		}
 		UpdateCursorInput();
 		// Steering and lateral movement remain continuous through the roll. Double
@@ -314,7 +373,30 @@ void AArcadeJetPawn::ActivateQuickReversal()
 {
 	const float PreferredDirection = FMath::Abs(CursorSteering.X) > 0.05f
 		? CursorSteering.X : StrafeInput;
-	QuickReversal->RequestActivation(PreferredDirection);
+	AbilityQueue->RequestAbility(EPlaneAbilityType::QuickReversal, PreferredDirection);
+}
+
+void AArcadeJetPawn::ActivateBackwardDash()
+{
+	AbilityQueue->RequestAbility(EPlaneAbilityType::BackwardDash);
+}
+
+void AArcadeJetPawn::ActivateForwardDash()
+{
+	AbilityQueue->RequestAbility(EPlaneAbilityType::ForwardDash);
+}
+
+void AArcadeJetPawn::ActivateBlink()
+{
+	FVector2D MovementInput = FVector2D::ZeroVector;
+	if (const APlayerController* PlayerController = Cast<APlayerController>(GetController()))
+	{
+		MovementInput.X = (PlayerController->IsInputKeyDown(EKeys::W) ? 1.0f : 0.0f)
+			- (PlayerController->IsInputKeyDown(EKeys::S) ? 1.0f : 0.0f);
+		MovementInput.Y = (PlayerController->IsInputKeyDown(EKeys::D) ? 1.0f : 0.0f)
+			- (PlayerController->IsInputKeyDown(EKeys::A) ? 1.0f : 0.0f);
+	}
+	AbilityQueue->RequestAbility(EPlaneAbilityType::Blink, 0.0f, MovementInput);
 }
 
 void AArcadeJetPawn::SetBrake(const float Value)
@@ -353,6 +435,11 @@ void AArcadeJetPawn::AddHoverCameraYawInput(const float Value)
 		HoverCameraOrbitYaw = FMath::UnwindDegrees(
 			HoverCameraOrbitYaw + Value * HoverCameraMouseSensitivity);
 	}
+	else if (bRearViewOrbitHeld)
+	{
+		RearViewOrbitYaw = FMath::UnwindDegrees(
+			RearViewOrbitYaw + Value * ArcadeJetCameraTuning::RearViewMouseSensitivity);
+	}
 }
 
 void AArcadeJetPawn::AddHoverCameraPitchInput(const float Value)
@@ -363,15 +450,17 @@ void AArcadeJetPawn::AddHoverCameraPitchInput(const float Value)
 			HoverCameraOrbitPitch + Value * HoverCameraMouseSensitivity,
 			-MaxHoverCameraPitch, MaxHoverCameraPitch);
 	}
+	else if (bRearViewOrbitHeld)
+	{
+		RearViewOrbitPitch = FMath::Clamp(
+			RearViewOrbitPitch + Value * ArcadeJetCameraTuning::RearViewMouseSensitivity,
+			-ArcadeJetCameraTuning::RearViewMaxPitch,
+			ArcadeJetCameraTuning::RearViewMaxPitch);
+	}
 }
 
-void AArcadeJetPawn::BeginHoverCameraOrbit()
+void AArcadeJetPawn::CaptureCameraMouse()
 {
-	if (bHoverCameraOrbitHeld)
-	{
-		return;
-	}
-	bHoverCameraOrbitHeld = true;
 	if (APlayerController* PlayerController = Cast<APlayerController>(GetController()))
 	{
 		float MouseX = 0.0f;
@@ -383,13 +472,8 @@ void AArcadeJetPawn::BeginHoverCameraOrbit()
 	}
 }
 
-void AArcadeJetPawn::EndHoverCameraOrbit()
+void AArcadeJetPawn::ReleaseCameraMouse()
 {
-	if (!bHoverCameraOrbitHeld)
-	{
-		return;
-	}
-	bHoverCameraOrbitHeld = false;
 	if (APlayerController* PlayerController = Cast<APlayerController>(GetController()))
 	{
 		PlayerController->bShowMouseCursor = true;
@@ -406,10 +490,95 @@ void AArcadeJetPawn::EndHoverCameraOrbit()
 	bHasSavedCursorPosition = false;
 }
 
+void AArcadeJetPawn::BeginHoverCameraOrbit()
+{
+	if (bHoverCameraOrbitHeld)
+	{
+		return;
+	}
+	bHoverCameraOrbitHeld = true;
+	CaptureCameraMouse();
+}
+
+void AArcadeJetPawn::EndHoverCameraOrbit()
+{
+	if (!bHoverCameraOrbitHeld)
+	{
+		return;
+	}
+	bHoverCameraOrbitHeld = false;
+	ReleaseCameraMouse();
+}
+
+void AArcadeJetPawn::BeginRearView()
+{
+	if (bRearViewHeld || FlightMovement->GetHoverState() != EArcadeHoverState::Flying)
+	{
+		return;
+	}
+
+	bRearViewHeld = true;
+	bRearViewOrbitHeld = false;
+	RearViewOrbitYaw = 0.0f;
+	RearViewOrbitPitch = 0.0f;
+	RearViewCameraDistance = ArcadeJetCameraTuning::FlightDistance;
+	WeaponSystem->SetFireHeld(EWeaponSlot::Gun, false);
+	WeaponSystem->SetFireHeld(EWeaponSlot::Missile, false);
+	CaptureCameraMouse();
+}
+
+void AArcadeJetPawn::EndRearView()
+{
+	if (!bRearViewHeld)
+	{
+		return;
+	}
+
+	bRearViewHeld = false;
+	if (!bRearViewOrbitHeld)
+	{
+		bSnapToFlightCamera = true;
+		ReleaseCameraMouse();
+	}
+}
+
+void AArcadeJetPawn::BeginRearViewOrbit()
+{
+	if (bRearViewHeld)
+	{
+		bRearViewOrbitHeld = true;
+	}
+}
+
+void AArcadeJetPawn::EndRearViewOrbit()
+{
+	if (!bRearViewOrbitHeld)
+	{
+		return;
+	}
+	bRearViewOrbitHeld = false;
+	if (!bRearViewHeld)
+	{
+		bSnapToFlightCamera = true;
+		ReleaseCameraMouse();
+	}
+}
+
 void AArcadeJetPawn::SetHoverCameraZoom(const float Value)
 {
-	if (FMath::Abs(Value) <= KINDA_SMALL_NUMBER
-		|| FlightMovement->GetHoverState() == EArcadeHoverState::Flying)
+	if (FMath::Abs(Value) <= KINDA_SMALL_NUMBER)
+	{
+		return;
+	}
+	if (bRearViewOrbitHeld)
+	{
+		RearViewCameraDistance = FMath::Clamp(
+			RearViewCameraDistance - Value * ArcadeJetCameraTuning::RearViewZoomStep,
+			ArcadeJetCameraTuning::RearViewMinDistance,
+			ArcadeJetCameraTuning::RearViewMaxDistance);
+		return;
+	}
+	if (FlightMovement->GetHoverState() == EArcadeHoverState::Flying)
 	{
 		return;
 	}
@@ -420,6 +589,11 @@ void AArcadeJetPawn::SetHoverCameraZoom(const float Value)
 
 void AArcadeJetPawn::StartMissileFire()
 {
+	if (bRearViewHeld)
+	{
+		BeginRearViewOrbit();
+		return;
+	}
 	if (FlightMovement->GetHoverState() == EArcadeHoverState::Hovering)
 	{
 		BeginHoverCameraOrbit();
@@ -434,13 +608,14 @@ void AArcadeJetPawn::StartMissileFire()
 
 void AArcadeJetPawn::StopMissileFire()
 {
+	EndRearViewOrbit();
 	EndHoverCameraOrbit();
 	WeaponSystem->SetFireHeld(EWeaponSlot::Missile, false);
 }
 
 void AArcadeJetPawn::StartGunFire()
 {
-	if (!FlightMovement->IsCombatFlightEnabled())
+	if (bRearViewHeld || bRearViewOrbitHeld || !FlightMovement->IsCombatFlightEnabled())
 	{
 		return;
 	}
@@ -469,6 +644,11 @@ void AArcadeJetPawn::RejectMissileTarget()
 
 void AArcadeJetPawn::UpdateCursorInput()
 {
+	if (bRearViewHeld || bRearViewOrbitHeld)
+	{
+		CursorSteering = FVector2D::ZeroVector;
+		return;
+	}
 	float DesiredX = 0.0f;
 	float DesiredY = 0.0f;
 	if (const APlayerController* PlayerController = Cast<APlayerController>(GetController()))
@@ -517,6 +697,37 @@ void AArcadeJetPawn::UpdateCameraAfterFlight(const float DeltaSeconds)
 	const FVector StableTransitionLookTarget = PlaneLocation
 		+ LevelFlightForward * ArcadeJetCameraTuning::LookAheadDistance;
 
+	if (bRearViewHeld || bRearViewOrbitHeld)
+	{
+		const FQuat OrbitRotation = FlightUp.IsNearlyZero()
+			? GetActorQuat()
+			: FRotationMatrix::MakeFromXZ(FlightForward, FlightUp).ToQuat();
+		const FQuat LocalOrbit = FQuat(FVector::UpVector,
+			FMath::DegreesToRadians(RearViewOrbitYaw))
+			* FQuat(FVector::RightVector,
+				FMath::DegreesToRadians(-RearViewOrbitPitch));
+		const FVector CameraOffsetDirection =
+			OrbitRotation.RotateVector(LocalOrbit.RotateVector(FVector::ForwardVector));
+		const FVector RearEye = PlaneLocation
+			+ CameraOffsetDirection * RearViewCameraDistance
+			+ FlightUp * ArcadeJetCameraTuning::FlightHeight;
+		const FVector RearLookTarget = bRearViewOrbitHeld
+			? PlaneLocation
+			: PlaneLocation - FlightForward * ArcadeJetCameraTuning::LookAheadDistance;
+		const FVector RearViewDirection = (RearLookTarget - RearEye).GetSafeNormal();
+		CurrentCameraWorldPosition = RearEye;
+		if (!RearViewDirection.IsNearlyZero())
+		{
+			CurrentCameraWorldRotation = FRotationMatrix::MakeFromXZ(
+				RearViewDirection, FlightUp).Rotator();
+		}
+		CameraBoom->SetWorldLocationAndRotation(
+			CurrentCameraWorldPosition, CurrentCameraWorldRotation);
+		WeaponSystem->SetAimContext(
+			FollowCamera->GetComponentLocation(), FollowCamera->GetForwardVector());
+		return;
+	}
+
 	const FRotator HoverOrbitRotation(
 		HoverCameraOrbitPitch,
 		GetActorRotation().Yaw + HoverCameraOrbitYaw,
@@ -534,8 +745,21 @@ void AArcadeJetPawn::UpdateCameraAfterFlight(const float DeltaSeconds)
 		ArcadeJetCameraTuning::NormalFollowResponse,
 		ArcadeJetCameraTuning::BoostFollowResponse,
 		BoostAlpha);
+	float MobilityFlightFollowResponse = FlightFollowResponse;
+	if (BackwardDash && BackwardDash->IsDashActive())
+	{
+		MobilityFlightFollowResponse = FMath::Max(
+			MobilityFlightFollowResponse,
+			ArcadeJetCameraTuning::BackwardDashFollowResponse);
+	}
+	if (Blink && Blink->IsCameraRecovering())
+	{
+		MobilityFlightFollowResponse = FMath::Max(
+			MobilityFlightFollowResponse,
+			ArcadeJetCameraTuning::BlinkRecoveryFollowResponse);
+	}
 	const float FollowResponse = FMath::Lerp(
-		FlightFollowResponse,
+		MobilityFlightFollowResponse,
 		ArcadeJetCameraTuning::HoverFollowResponse,
 		HoverAlpha);
 	const bool bQuickReversalActive = QuickReversal
@@ -590,10 +814,16 @@ void AArcadeJetPawn::UpdateCameraAfterFlight(const float DeltaSeconds)
 		RadialOffset = RadialOffset.GetSafeNormal()
 			.RotateAngleAxis(OrbitDegrees, ManeuverUp)
 			* (StartRadius + ArcadeJetCameraTuning::ReversalCameraPullBack * ArcAlpha);
-		// Keep the path centered at the activation point. During the first phase the
-		// plane moves away while facing the camera, then flies back toward it before
-		// the delayed camera orbit catches up.
-		const FVector PatternEye = QuickReversalCameraStartPlaneLocation + RadialOffset
+		// Follow part of the aircraft displacement while retaining camera inertia.
+		// This keeps the real curved flight path readable without leaving the camera
+		// behind at a fixed activation point or snapping it onto the aircraft.
+		const float CameraAnchorFollowAlpha = FMath::SmoothStep(
+			0.12f, 0.88f, ManeuverProgress);
+		const FVector CameraAnchor = FMath::Lerp(
+			QuickReversalCameraStartPlaneLocation,
+			PlaneLocation,
+			CameraAnchorFollowAlpha);
+		const FVector PatternEye = CameraAnchor + RadialOffset
 			+ ManeuverUp * (
 				AxialOffset
 				+ ArcadeJetCameraTuning::ReversalCameraLift * ArcAlpha);
@@ -627,10 +857,11 @@ void AArcadeJetPawn::UpdateCameraAfterFlight(const float DeltaSeconds)
 				PatternViewDirection, PatternUp).Rotator();
 		}
 	}
-	else if (FVector::DistSquared(CurrentCameraWorldPosition, DesiredEye)
+	else if (bSnapToFlightCamera || FVector::DistSquared(CurrentCameraWorldPosition, DesiredEye)
 			> FMath::Square(ArcadeJetCameraTuning::TeleportSnapDistance))
 	{
 		CurrentCameraWorldPosition = DesiredEye;
+		bSnapToFlightCamera = false;
 	}
 	else
 	{
