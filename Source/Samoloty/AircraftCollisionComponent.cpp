@@ -1,10 +1,12 @@
 #include "AircraftCollisionComponent.h"
 
+#include "ArcadeFlightComponent.h"
 #include "HealthComponent.h"
 #include "Camera/CameraShakeBase.h"
 #include "Camera/PlayerCameraManager.h"
 #include "Components/CapsuleComponent.h"
 #include "Components/ShapeComponent.h"
+#include "Engine/OverlapResult.h"
 #include "GameFramework/Pawn.h"
 #include "GameFramework/PlayerController.h"
 #include "Kismet/GameplayStatics.h"
@@ -93,6 +95,45 @@ bool UAircraftCollisionComponent::SweepMovementCapsule(const FVector& Start,
 	return false;
 }
 
+bool UAircraftCollisionComponent::WouldOverlapAtOwnerRotation(
+	const FRotator& OwnerRotation) const
+{
+	const AActor* Owner = GetOwner();
+	if (!Owner || !GetWorld() || !MovementCapsule)
+	{
+		return false;
+	}
+
+	const FTransform OwnerTransform(
+		OwnerRotation, Owner->GetActorLocation(), Owner->GetActorScale3D());
+	const FTransform CapsuleTransform = MovementCapsule->GetRelativeTransform() * OwnerTransform;
+	FCollisionObjectQueryParams ObjectTypes;
+	ObjectTypes.AddObjectTypesToQuery(ECC_WorldStatic);
+	ObjectTypes.AddObjectTypesToQuery(ECC_WorldDynamic);
+	ObjectTypes.AddObjectTypesToQuery(ECC_Pawn);
+	ObjectTypes.AddObjectTypesToQuery(ECC_Vehicle);
+	FCollisionQueryParams QueryParams(SCENE_QUERY_STAT(AircraftHoverRotation), false, Owner);
+	QueryParams.AddIgnoredActor(Owner);
+	TArray<FOverlapResult> Overlaps;
+	if (!GetWorld()->OverlapMultiByObjectType(Overlaps,
+		CapsuleTransform.GetLocation(), CapsuleTransform.GetRotation(), ObjectTypes,
+		FCollisionShape::MakeCapsule(MovementCapsule->GetScaledCapsuleRadius(),
+			MovementCapsule->GetScaledCapsuleHalfHeight()), QueryParams))
+	{
+		return false;
+	}
+	for (const FOverlapResult& Overlap : Overlaps)
+	{
+		const UPrimitiveComponent* Component = Overlap.GetComponent();
+		if (!Component || Component->ComponentHasTag(DamageHitboxTag))
+		{
+			continue;
+		}
+		return true;
+	}
+	return false;
+}
+
 FVector UAircraftCollisionComponent::MoveOwner(const FVector& RequestedMove,
 	const FVector& RequestedVelocity, const bool bEnableImpactResponse)
 {
@@ -136,6 +177,11 @@ FVector UAircraftCollisionComponent::MoveOwner(const FVector& RequestedMove,
 		&& bOtherActorDamageable && !bAircraftBodyCollision;
 	const float ImpactSpeed = FMath::Max(
 		0.0f, -FVector::DotProduct(RelativeVelocity, SurfaceNormal));
+	if (UArcadeFlightComponent* Flight = Owner->FindComponentByClass<UArcadeFlightComponent>();
+		Flight && Flight->GetHoverState() == EArcadeHoverState::Entering)
+	{
+		Flight->CancelHoverEntryFromCollision();
+	}
 
 	if (bUseSoftCollision)
 	{
@@ -195,7 +241,10 @@ FVector UAircraftCollisionComponent::MoveOwner(const FVector& RequestedMove,
 		const FRotator DirectionRotation = PostCollisionVelocity.Rotation();
 		Owner->SetActorRotation(FRotator(DirectionRotation.Pitch, DirectionRotation.Yaw, 0.0f));
 	}
-	HandleImpact(Hit, ImpactSpeed, bOtherActorDamageable);
+	const float EffectiveImpactSpeed = !bOtherActorDamageable && !bAircraftBodyCollision
+		? FMath::Max(ImpactSpeed, RequestedVelocity.Size() * ShallowImpactSpeedFraction)
+		: ImpactSpeed;
+	HandleImpact(Hit, EffectiveImpactSpeed, bOtherActorDamageable);
 	return PostCollisionVelocity;
 }
 
@@ -203,7 +252,7 @@ void UAircraftCollisionComponent::HandleImpact(const FHitResult& Hit,
 	const float ImpactSpeed, const bool bDamageableActorCollision)
 {
 	AActor* Owner = GetOwner();
-	if (!Owner || !Owner->HasAuthority() || !GetWorld())
+	if (!Owner || !GetWorld())
 	{
 		return;
 	}
@@ -211,11 +260,36 @@ void UAircraftCollisionComponent::HandleImpact(const FHitResult& Hit,
 	const float DamageAlpha = FMath::GetMappedRangeValueClamped(
 		FVector2D(MinDamageSpeed, FMath::Max(MinDamageSpeed + 1.0f, MaxDamageSpeed)),
 		FVector2D(0.0f, 1.0f), ImpactSpeed);
+	const APawn* OwnerPawnForPrediction = Cast<APawn>(Owner);
+	if (!Owner->HasAuthority())
+	{
+		if (OwnerPawnForPrediction && OwnerPawnForPrediction->IsLocallyControlled()
+			&& ImpactSpeed >= MinEffectSpeed && Now >= NextPredictedEffectTime)
+		{
+			NextPredictedEffectTime = Now + EffectCooldown;
+			++LocalImpactSequence;
+			if (LocalImpactSequence == 0)
+			{
+				++LocalImpactSequence;
+			}
+			LastPredictedImpact = FCombatImpactEvent::MakeFromHit(
+				LocalImpactSequence, 0, Hit);
+			LastPredictedEffectTime = Now;
+			PlayImpactEffects(LastPredictedImpact,
+				FMath::Clamp(DamageAlpha, 0.15f, 1.0f));
+		}
+		return;
+	}
 	if (ImpactSpeed >= MinEffectSpeed && Now >= NextEffectTime)
 	{
 		NextEffectTime = Now + EffectCooldown;
-		MulticastPlayImpactEffects(Hit.ImpactPoint, Hit.ImpactNormal,
-			FMath::Clamp(DamageAlpha, 0.15f, 1.0f));
+		++ServerImpactSequence;
+		if (ServerImpactSequence == 0)
+		{
+			++ServerImpactSequence;
+		}
+		MulticastPlayImpactEffects(FCombatImpactEvent::MakeFromHit(
+			ServerImpactSequence, 0, Hit), FMath::Clamp(DamageAlpha, 0.15f, 1.0f));
 	}
 	if (ImpactSpeed < MinDamageSpeed || Now < NextDamageTime)
 	{
@@ -248,13 +322,29 @@ void UAircraftCollisionComponent::HandleImpact(const FHitResult& Hit,
 }
 
 void UAircraftCollisionComponent::MulticastPlayImpactEffects_Implementation(
-	const FVector_NetQuantize ImpactPoint, const FVector_NetQuantizeNormal ImpactNormal,
-	const float Intensity)
+	const FCombatImpactEvent& Impact, const float Intensity)
 {
 	if (GetNetMode() == NM_DedicatedServer)
 	{
 		return;
 	}
+	const APawn* OwnerPawn = Cast<APawn>(GetOwner());
+	const double Now = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0;
+	if (OwnerPawn && OwnerPawn->IsLocallyControlled()
+		&& Now - LastPredictedEffectTime <= 0.35
+		&& LastPredictedImpact.MatchesPredictedContact(Impact))
+	{
+		return;
+	}
+	PlayImpactEffects(Impact, Intensity);
+}
+
+void UAircraftCollisionComponent::PlayImpactEffects(
+	const FCombatImpactEvent& Impact, const float Intensity)
+{
+	FVector ImpactPoint;
+	FVector ImpactNormal;
+	Impact.Resolve(ImpactPoint, ImpactNormal);
 	if (ImpactEffect)
 	{
 		if (UNiagaraComponent* Effect = UNiagaraFunctionLibrary::SpawnSystemAtLocation(

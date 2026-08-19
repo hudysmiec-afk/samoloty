@@ -16,6 +16,7 @@ class UForwardDashComponent;
 class UGroundBarrageWeaponComponent;
 class UGunAimAssistComponent;
 class UHealthComponent;
+class UHitRewindComponent;
 class UJetBoostComponent;
 class UJetEngineAudioComponent;
 class UJetStatsComponent;
@@ -33,6 +34,7 @@ class USceneComponent;
 class USpringArmComponent;
 class UStaticMeshComponent;
 class UTargetSelectionComponent;
+class UTargetIntentComponent;
 class UWeaponSystemComponent;
 class USoundBase;
 class UCameraShakeBase;
@@ -51,12 +53,16 @@ public:
 	/** Applies render-only roll to the complete visible aircraft assembly. */
 	void SetVisualBank(float BankDegrees);
 
+	/** Applies the already smoothed Network Prediction pose to remote visuals only. */
+	void SetRemoteNetworkPresentationTransform(const FVector& Location, const FRotator& Rotation);
+
 	/** Temporarily replaces normal visual bank with the evasive roll orientation. */
 	void SetEvasiveRollPresentation(bool bActive, float RollDegrees);
 
 	/** Moves the logical plane with the shared movement capsule. */
 	FVector MovePlaneWithCollision(const FVector& RequestedMove, const FVector& RequestedVelocity,
 		bool bEnableImpactResponse = true);
+	bool WouldPlaneRotationCollide(const FRotator& ProposedRotation) const;
 
 	/** Called by the flight component after movement/interpolation for deterministic camera order. */
 	void UpdateCameraAfterFlight(float DeltaSeconds);
@@ -67,6 +73,10 @@ protected:
 	/** Invisible transform representing the actual flight path and camera direction. */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Plane|Components")
 	TObjectPtr<USceneComponent> VirtualFlightRoot;
+
+	/** Client-only correction offset. It never changes the authoritative flight model. */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Plane|Components")
+	TObjectPtr<USceneComponent> NetworkPresentationRoot;
 
 	/** Axis parallel to the flight direction but positioned above the aircraft. */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Plane|Components")
@@ -92,6 +102,9 @@ protected:
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Plane|Components")
 	TObjectPtr<UAircraftCollisionComponent> AircraftCollision;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Plane|Components")
+	TObjectPtr<UHitRewindComponent> HitRewind;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Plane|Components")
 	TObjectPtr<UStaticMeshComponent> PlaneMesh;
@@ -146,6 +159,10 @@ protected:
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Plane|Components")
 	TObjectPtr<UTargetSelectionComponent> TargetSelection;
+
+	/** Replicated target used by remote threat indicators; it does not drive weapons. */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Plane|Components")
+	TObjectPtr<UTargetIntentComponent> TargetIntent;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Plane|Components")
 	TObjectPtr<UHomingMissileWeaponComponent> HomingMissileWeapon;
@@ -216,6 +233,7 @@ private:
 	void StartBoost();
 	void StopBoost();
 	void ToggleHover();
+	void CommitHoverToggle();
 	void SetHoverCameraZoom(float Value);
 	void AddHoverCameraYawInput(float Value);
 	void AddHoverCameraPitchInput(float Value);
@@ -242,6 +260,7 @@ private:
 	float BrakeInput = 0.0f;
 	float CurrentVisualBankDegrees = 0.0f;
 	bool bHoverCameraOrbitHeld = false;
+	bool bHoverToggleQueued = false;
 	float HoverCameraOrbitYaw = 0.0f;
 	float HoverCameraOrbitPitch = 0.0f;
 	bool bRearViewHeld = false;

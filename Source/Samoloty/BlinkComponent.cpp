@@ -19,7 +19,7 @@ namespace BlinkTuning
 UBlinkComponent::UBlinkComponent()
 {
 	PrimaryComponentTick.bCanEverTick = false;
-	SetIsReplicatedByDefault(true);
+	SetIsReplicatedByDefault(false);
 }
 
 void UBlinkComponent::BeginPlay()
@@ -88,6 +88,13 @@ void UBlinkComponent::StartAuthoritativeBlink(const FVector2D& DirectionInput)
 
 void UBlinkComponent::MulticastPlayBlinkEffects_Implementation(
 	const FVector_NetQuantize DepartureLocation, const FVector_NetQuantize ArrivalLocation)
+
+{
+	PlayPredictedActivationEffect(DepartureLocation, ArrivalLocation);
+}
+
+void UBlinkComponent::PlayPredictedActivationEffect(
+	const FVector& DepartureLocation, const FVector& ArrivalLocation)
 {
 	if (GetNetMode() == NM_DedicatedServer)
 	{
@@ -111,16 +118,13 @@ void UBlinkComponent::MulticastPlayBlinkEffects_Implementation(
 
 float UBlinkComponent::GetCooldownRemaining() const
 {
-	const double EndTime = GetOwner() && GetOwner()->HasAuthority()
-		? NextAllowedServerTime
-		: BlinkState.ServerActivationTime + BlinkTuning::Cooldown;
-	return static_cast<float>(FMath::Max(0.0, EndTime - GetSynchronizedTime()));
+	return CachedFlightComponent
+		? CachedFlightComponent->GetBlinkCooldownRemaining() : 0.0f;
 }
 
 bool UBlinkComponent::IsCameraRecovering() const
 {
-	const double Elapsed = GetSynchronizedTime() - BlinkState.ServerActivationTime;
-	return Elapsed >= 0.0 && Elapsed < BlinkTuning::CameraRecoveryDuration;
+	return CachedFlightComponent && CachedFlightComponent->IsBlinkCameraRecovering();
 }
 
 double UBlinkComponent::GetSynchronizedTime() const

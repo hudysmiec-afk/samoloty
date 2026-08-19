@@ -32,6 +32,7 @@ public:
 	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
 
 	virtual void SetFireHeld(bool bHeld) override;
+	virtual void StartEquipCooldown() override;
 	virtual void SetFirePoints(USceneComponent* LeftPoint, USceneComponent* RightPoint) override;
 	virtual void RejectCurrentTarget() override;
 	virtual bool GetCooldownStatus(float& OutRemainingSeconds,

@@ -5,6 +5,7 @@
 #include "JetBoostComponent.generated.h"
 
 class UJetStatsComponent;
+class UArcadeFlightComponent;
 class UBackwardDashComponent;
 class UQuickReversalComponent;
 class UForwardDashComponent;
@@ -21,7 +22,6 @@ public:
 	UJetBoostComponent();
 	virtual void BeginPlay() override;
 	virtual void TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction) override;
-	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
 
 	UFUNCTION(BlueprintCallable, Category="Plane|Boost")
 	void SetBoostRequested(bool bRequested);
@@ -50,26 +50,16 @@ public:
 	bool bShowBoostDebug = false;
 
 private:
-	UFUNCTION(Server, Reliable)
-	void ServerSetBoostRequested(bool bRequested);
-
-	UFUNCTION()
-	void OnRep_IsBoosting();
-
-	void SetAuthoritativeBoostState(bool bNewBoosting);
 	void UpdatePresentationBoostState();
 	const UJetStatsComponent* GetStatsComponent() const;
 	void DrawBoostDebug(float MaxEnergy) const;
 
-	UPROPERTY(ReplicatedUsing=OnRep_IsBoosting)
 	bool bIsBoosting = false;
 
-	UPROPERTY(Replicated)
 	float CurrentEnergy = 0.0f;
 
 	bool bLocalBoostRequested = false;
 	float BoostAlpha = 0.0f;
-	float TimeSinceBoostStopped = 0.0f;
 	bool bLastPresentationBoosting = false;
 
 	UPROPERTY(Transient)
@@ -80,4 +70,7 @@ private:
 
 	UPROPERTY(Transient)
 	TObjectPtr<UForwardDashComponent> CachedForwardDashComponent;
+
+	UPROPERTY(Transient)
+	TObjectPtr<UArcadeFlightComponent> CachedFlightComponent;
 };

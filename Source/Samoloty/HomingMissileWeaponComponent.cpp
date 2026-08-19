@@ -219,6 +219,22 @@ void UHomingMissileWeaponComponent::OnWeaponEquippedChanged()
 	}
 }
 
+void UHomingMissileWeaponComponent::StartEquipCooldown()
+{
+	const UJetStatsComponent* StatsComponent = GetOwner()
+		? GetOwner()->FindComponentByClass<UJetStatsComponent>() : nullptr;
+	if (!GetWorld() || !StatsComponent)
+	{
+		return;
+	}
+	const double ReadyTime = GetServerTimeSeconds()
+		+ FMath::Max(0.0f, StatsComponent->GetHomingMissileStats().Cooldown);
+	WeaponState = EHomingMissileWeaponState::Cooldown;
+	SalvosFired = 0;
+	NextActionServerTime = FMath::Max(NextActionServerTime, ReadyTime);
+	SequenceTarget.Reset();
+}
+
 void UHomingMissileWeaponComponent::StartSequence()
 {
 	if (!GetOwner()->HasAuthority() || WeaponState != EHomingMissileWeaponState::Ready

@@ -4,6 +4,7 @@
 #include "JetStatsComponent.h"
 #include "RadarComponent.h"
 #include "TargetSelectionComponent.h"
+#include "TargetIntentComponent.h"
 #include "DrawDebugHelpers.h"
 #include "Engine/Engine.h"
 #include "Engine/World.h"
@@ -12,7 +13,7 @@
 UMissileTargetingComponent::UMissileTargetingComponent()
 {
 	PrimaryComponentTick.bCanEverTick = true;
-	SetIsReplicatedByDefault(false);
+	SetIsReplicatedByDefault(true);
 }
 
 void UMissileTargetingComponent::TickComponent(const float DeltaTime, const ELevelTick TickType,
@@ -87,7 +88,40 @@ void UMissileTargetingComponent::SetCurrentTarget(AActor* NewTarget)
 		return;
 	}
 	CurrentTarget = NewTarget;
+	const APawn* OwnerPawn = Cast<APawn>(GetOwner());
+	if (OwnerPawn && OwnerPawn->IsLocallyControlled())
+	{
+		if (GetOwner()->HasAuthority())
+		{
+			SetAuthoritativeTargetIntent(NewTarget);
+		}
+		else
+		{
+			ServerSetLockedTarget(NewTarget);
+		}
+	}
 	OnTargetChanged.Broadcast(PreviousTarget, NewTarget);
+}
+
+void UMissileTargetingComponent::ServerSetLockedTarget_Implementation(AActor* NewTarget)
+{
+	SetAuthoritativeTargetIntent(NewTarget);
+}
+
+void UMissileTargetingComponent::SetAuthoritativeTargetIntent(AActor* NewTarget)
+{
+	if (!GetOwner() || !GetOwner()->HasAuthority())
+	{
+		return;
+	}
+	const FHomingMissileStats* Stats = GetStats();
+	AActor* ValidatedTarget = Stats && IsEligibleAuthoritativeTarget(NewTarget, *Stats)
+		? NewTarget : nullptr;
+	if (UTargetIntentComponent* TargetIntent =
+		GetOwner()->FindComponentByClass<UTargetIntentComponent>())
+	{
+		TargetIntent->SetCurrentTarget(ValidatedTarget);
+	}
 }
 
 bool UMissileTargetingComponent::IsEligibleTarget(const AActor* Candidate,
@@ -118,6 +152,39 @@ bool UMissileTargetingComponent::IsEligibleTarget(const AActor* Candidate,
 
 	const float MinimumDot = FMath::Cos(FMath::DegreesToRadians(Stats.LockAngleDegrees));
 	return FVector::DotProduct(GetOwner()->GetActorForwardVector(), ToTarget.GetSafeNormal()) >= MinimumDot;
+}
+
+bool UMissileTargetingComponent::IsEligibleAuthoritativeTarget(const AActor* Candidate,
+	const FHomingMissileStats& Stats) const
+{
+	if (!IsValid(Candidate) || Candidate == GetOwner() || Candidate->IsActorBeingDestroyed())
+	{
+		return false;
+	}
+	const UHealthComponent* Health = Candidate->FindComponentByClass<UHealthComponent>();
+	if (!Health || Health->IsDead())
+	{
+		return false;
+	}
+	const UTargetSelectionComponent* Selection = GetOwner()
+		? GetOwner()->FindComponentByClass<UTargetSelectionComponent>() : nullptr;
+	if (!Selection || Selection->GetSelectedTargetForAimAssist() != Candidate)
+	{
+		return false;
+	}
+	const URadarComponent* Radar = GetOwner()->FindComponentByClass<URadarComponent>();
+	if (!Radar || !Radar->IsWithinMissileTargetingRange(Candidate, Stats.LockRange))
+	{
+		return false;
+	}
+	const FVector ToTarget = Candidate->GetActorLocation() - GetOwner()->GetActorLocation();
+	if (ToTarget.IsNearlyZero())
+	{
+		return false;
+	}
+	const float MinimumDot = FMath::Cos(FMath::DegreesToRadians(Stats.LockAngleDegrees));
+	return FVector::DotProduct(GetOwner()->GetActorForwardVector(), ToTarget.GetSafeNormal())
+		>= MinimumDot;
 }
 
 const FHomingMissileStats* UMissileTargetingComponent::GetStats() const

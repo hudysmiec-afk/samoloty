@@ -9,6 +9,7 @@
 #include "GunAimAssistComponent.h"
 #include "GroundBarrageWeaponComponent.h"
 #include "HealthComponent.h"
+#include "HitRewindComponent.h"
 #include "HomingMissileWeaponComponent.h"
 #include "JetBoostComponent.h"
 #include "JetEngineAudioComponent.h"
@@ -22,6 +23,7 @@
 #include "RifleGunComponent.h"
 #include "ShotgunGunComponent.h"
 #include "TargetSelectionComponent.h"
+#include "TargetIntentComponent.h"
 #include "WeaponSystemComponent.h"
 #include "Camera/CameraComponent.h"
 #include "Components/BoxComponent.h"
@@ -81,9 +83,11 @@ AArcadeJetPawn::AArcadeJetPawn()
 
 	VirtualFlightRoot = CreateDefaultSubobject<USceneComponent>(TEXT("VirtualFlightRoot"));
 	RootComponent = VirtualFlightRoot;
+	NetworkPresentationRoot = CreateDefaultSubobject<USceneComponent>(TEXT("NetworkPresentationRoot"));
+	NetworkPresentationRoot->SetupAttachment(VirtualFlightRoot);
 
 	EvasiveRollPivot = CreateDefaultSubobject<USceneComponent>(TEXT("EvasiveRollPivot"));
-	EvasiveRollPivot->SetupAttachment(VirtualFlightRoot);
+	EvasiveRollPivot->SetupAttachment(NetworkPresentationRoot);
 	EvasiveRollPivot->SetRelativeLocation(
 		FVector(0.0f, 0.0f, ArcadeJetPresentationTuning::EvasiveRollPivotHeight));
 
@@ -110,6 +114,7 @@ AArcadeJetPawn::AArcadeJetPawn()
 	RightWingHitbox->SetupAttachment(VisualRoot);
 	RightWingHitbox->SetRelativeLocation(FVector(0.0f, 115.0f, 0.0f));
 	AircraftCollision = CreateDefaultSubobject<UAircraftCollisionComponent>(TEXT("AircraftCollision"));
+	HitRewind = CreateDefaultSubobject<UHitRewindComponent>(TEXT("HitRewind"));
 	UAircraftCollisionComponent::ConfigureDamageHitbox(BodyHitbox);
 	UAircraftCollisionComponent::ConfigureDamageHitbox(LeftWingHitbox);
 	UAircraftCollisionComponent::ConfigureDamageHitbox(RightWingHitbox);
@@ -136,6 +141,7 @@ AArcadeJetPawn::AArcadeJetPawn()
 		TEXT("RocketWeaponGroundBarrage"));
 	Radar = CreateDefaultSubobject<URadarComponent>(TEXT("Radar"));
 	TargetSelection = CreateDefaultSubobject<UTargetSelectionComponent>(TEXT("TargetSelection"));
+	TargetIntent = CreateDefaultSubobject<UTargetIntentComponent>(TEXT("TargetIntent"));
 	MissileTargeting = CreateDefaultSubobject<UMissileTargetingComponent>(TEXT("MissileTargeting"));
 	MissileWarning = CreateDefaultSubobject<UMissileWarningComponent>(TEXT("MissileWarning"));
 	HomingMissileWeapon = CreateDefaultSubobject<UHomingMissileWeaponComponent>(TEXT("RocketWeaponHoming"));
@@ -175,9 +181,22 @@ AArcadeJetPawn::AArcadeJetPawn()
 	FollowCamera->FieldOfView = ArcadeJetCameraTuning::FieldOfView;
 }
 
+bool AArcadeJetPawn::WouldPlaneRotationCollide(const FRotator& ProposedRotation) const
+{
+	return AircraftCollision
+		&& AircraftCollision->WouldOverlapAtOwnerRotation(ProposedRotation);
+}
+
 void AArcadeJetPawn::BeginPlay()
 {
 	Super::BeginPlay();
+	if (NetworkPresentationRoot && EvasiveRollPivot)
+	{
+		NetworkPresentationRoot->SetRelativeLocationAndRotation(
+			FVector::ZeroVector, FRotator::ZeroRotator);
+		EvasiveRollPivot->AttachToComponent(NetworkPresentationRoot,
+			FAttachmentTransformRules::KeepRelativeTransform);
+	}
 	// Existing Blueprint instances can retain the former Collision parent or an
 	// absolute rotation override after the native component hierarchy changes.
 	// Force the aircraft model back into the complete visual assembly so bank,
@@ -251,6 +270,17 @@ void AArcadeJetPawn::SetVisualBank(const float BankDegrees)
 {
 	CurrentVisualBankDegrees = BankDegrees;
 	ApplyVisualRotation();
+}
+
+void AArcadeJetPawn::SetRemoteNetworkPresentationTransform(
+	const FVector& Location, const FRotator& Rotation)
+{
+	if (!NetworkPresentationRoot)
+	{
+		return;
+	}
+	NetworkPresentationRoot->SetWorldLocationAndRotation(
+		Location, Rotation, false, nullptr, ETeleportType::TeleportPhysics);
 }
 
 void AArcadeJetPawn::SetEvasiveRollPresentation(const bool bActive, const float RollDegrees)
@@ -336,6 +366,11 @@ void AArcadeJetPawn::Tick(const float DeltaSeconds)
 	Super::Tick(DeltaSeconds);
 	if (IsLocallyControlled())
 	{
+		if (bHoverToggleQueued && FlightMovement->CanBeginHoverEntry())
+		{
+			bHoverToggleQueued = false;
+			CommitHoverToggle();
+		}
 		if (bHoverCameraOrbitHeld && FlightMovement->GetHoverState() != EArcadeHoverState::Hovering)
 		{
 			EndHoverCameraOrbit();
@@ -406,6 +441,7 @@ void AArcadeJetPawn::SetBrake(const float Value)
 
 void AArcadeJetPawn::StartBoost()
 {
+	bHoverToggleQueued = false;
 	EndHoverCameraOrbit();
 	FlightMovement->RequestExitHover();
 	JetBoost->SetBoostRequested(true);
@@ -418,14 +454,34 @@ void AArcadeJetPawn::StopBoost()
 
 void AArcadeJetPawn::ToggleHover()
 {
+	if (bHoverToggleQueued)
+	{
+		bHoverToggleQueued = false;
+		return;
+	}
+	if (FlightMovement->GetHoverState() == EArcadeHoverState::Flying
+		&& !FlightMovement->CanBeginHoverEntry())
+	{
+		if (!FlightMovement->IsBoundaryReturnActive())
+		{
+			bHoverToggleQueued = true;
+		}
+		return;
+	}
+	CommitHoverToggle();
+}
+
+void AArcadeJetPawn::CommitHoverToggle()
+{
 	EndHoverCameraOrbit();
-	// Stop held triggers before requesting the transition. Server-side weapon
-	// checks provide the authoritative equivalent.
-	WeaponSystem->SetFireHeld(EWeaponSlot::Gun, false);
-	WeaponSystem->SetFireHeld(EWeaponSlot::Missile, false);
-	HoverCameraOrbitYaw = 0.0f;
-	HoverCameraOrbitPitch = 0.0f;
-	FlightMovement->ToggleHover();
+	if (FlightMovement->ToggleHover())
+	{
+		// Only stop combat once the transition actually begins, not while B is queued.
+		WeaponSystem->SetFireHeld(EWeaponSlot::Gun, false);
+		WeaponSystem->SetFireHeld(EWeaponSlot::Missile, false);
+		HoverCameraOrbitYaw = 0.0f;
+		HoverCameraOrbitPitch = 0.0f;
+	}
 }
 
 void AArcadeJetPawn::AddHoverCameraYawInput(const float Value)

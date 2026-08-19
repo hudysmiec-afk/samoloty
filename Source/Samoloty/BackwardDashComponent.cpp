@@ -23,7 +23,7 @@ namespace BackwardDashTuning
 UBackwardDashComponent::UBackwardDashComponent()
 {
 	PrimaryComponentTick.bCanEverTick = false;
-	SetIsReplicatedByDefault(true);
+	SetIsReplicatedByDefault(false);
 }
 
 void UBackwardDashComponent::BeginPlay()
@@ -137,6 +137,12 @@ void UBackwardDashComponent::StartAuthoritativeDash()
 }
 
 void UBackwardDashComponent::MulticastPlayBackwardDashSound_Implementation()
+
+{
+	PlayPredictedActivationEffect();
+}
+
+void UBackwardDashComponent::PlayPredictedActivationEffect()
 {
 	if (BackwardDashSound && GetNetMode() != NM_DedicatedServer && GetOwner()
 		&& GetOwner()->GetRootComponent())
@@ -144,6 +150,11 @@ void UBackwardDashComponent::MulticastPlayBackwardDashSound_Implementation()
 		UGameplayStatics::SpawnSoundAttached(
 			BackwardDashSound, GetOwner()->GetRootComponent());
 	}
+}
+
+bool UBackwardDashComponent::IsDashActive() const
+{
+	return CachedFlightComponent && CachedFlightComponent->IsBackwardDashActive();
 }
 
 bool UBackwardDashComponent::GetAuthoritativeFlightRotation(FQuat& OutRotation) const
@@ -221,21 +232,14 @@ void UBackwardDashComponent::OnRep_DashState()
 
 float UBackwardDashComponent::GetCooldownRemaining() const
 {
-	const bool bAuthority = GetOwner() && GetOwner()->HasAuthority();
-	const double EndTime = bAuthority ? NextAllowedServerTime : LocalNextAllowedTime;
-	const double Now = bAuthority ? GetSynchronizedTime() : GetLocalTime();
-	return static_cast<float>(FMath::Max(0.0, EndTime - Now));
+	return CachedFlightComponent
+		? CachedFlightComponent->GetBackwardDashCooldownRemaining() : 0.0f;
 }
 
 float UBackwardDashComponent::GetManeuverProgress() const
 {
-	if (!DashState.bActive)
-	{
-		return 0.0f;
-	}
-	return FMath::Clamp(static_cast<float>(
-		(GetSynchronizedTime() - DashState.ServerStartTime) / BackwardDashTuning::Duration),
-		0.0f, 1.0f);
+	return CachedFlightComponent && CachedFlightComponent->IsBackwardDashActive()
+		? CachedFlightComponent->GetMobilityProgress() : 0.0f;
 }
 
 double UBackwardDashComponent::GetSynchronizedTime() const

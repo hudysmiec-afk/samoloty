@@ -234,7 +234,7 @@ void ARocketProjectile::SimulateRocketMovement(const float DeltaSeconds)
 				AActor* DamageTarget = Hit.GetActor()
 					&& Hit.GetActor()->FindComponentByClass<UHealthComponent>()
 					? Hit.GetActor() : nullptr;
-				Explode(DamageTarget, Hit.ImpactPoint);
+				Explode(DamageTarget, Hit.ImpactPoint, &Hit);
 				return;
 			}
 		}
@@ -309,7 +309,7 @@ void ARocketProjectile::SimulateHomingMovement(const float DeltaSeconds)
 				AActor* DamageTarget = Hit.GetActor()
 					&& Hit.GetActor()->FindComponentByClass<UHealthComponent>()
 					? Hit.GetActor() : nullptr;
-				Explode(DamageTarget, Hit.ImpactPoint);
+				Explode(DamageTarget, Hit.ImpactPoint, &Hit);
 				return;
 			}
 		}
@@ -550,7 +550,8 @@ void ARocketProjectile::ClearMissileWarningRegistration()
 	RegisteredWarningTarget.Reset();
 }
 
-void ARocketProjectile::Explode(AActor* DamageTarget, const FVector& ImpactLocation)
+void ARocketProjectile::Explode(AActor* DamageTarget, const FVector& ImpactLocation,
+	const FHitResult* PhysicalHit)
 {
 	if (!HasAuthority() || bExploded)
 	{
@@ -559,7 +560,18 @@ void ARocketProjectile::Explode(AActor* DamageTarget, const FVector& ImpactLocat
 
 	bExploded = true;
 	ClearMissileWarningRegistration();
-	ExplosionLocation = ImpactLocation;
+	ExplosionImpact = PhysicalHit
+		? FCombatImpactEvent::MakeFromHit(1, 0, *PhysicalHit,
+			-GetActorForwardVector())
+		: (DamageTarget
+			? FCombatImpactEvent::MakeOnTarget(1, 0, DamageTarget, ImpactLocation,
+				(ImpactLocation - DamageTarget->GetActorLocation()).GetSafeNormal(
+					UE_SMALL_NUMBER, -GetActorForwardVector()))
+			: FCombatImpactEvent::MakeMiss(1, 0, ImpactLocation, GetActorForwardVector()));
+	FVector ResolvedLocation;
+	FVector ResolvedNormal;
+	ExplosionImpact.Resolve(ResolvedLocation, ResolvedNormal);
+	ExplosionLocation = ResolvedLocation;
 	SetActorLocation(ImpactLocation);
 	if (DamageTarget)
 	{
@@ -575,13 +587,21 @@ void ARocketProjectile::OnRep_Exploded()
 	if (bExploded)
 	{
 		ClearMissileWarningRegistration();
-		SetActorLocation(ExplosionLocation);
+		FVector ResolvedLocation;
+		FVector ResolvedNormal;
+		ExplosionImpact.Resolve(ResolvedLocation, ResolvedNormal);
+		ExplosionLocation = ResolvedLocation;
+		SetActorLocation(ResolvedLocation);
 		PlayExplosionCosmetics();
 	}
 }
 
 void ARocketProjectile::PlayExplosionCosmetics()
 {
+	FVector ResolvedLocation;
+	FVector ResolvedNormal;
+	ExplosionImpact.Resolve(ResolvedLocation, ResolvedNormal);
+	ExplosionLocation = ResolvedLocation;
 	RocketMesh->SetVisibility(false, true);
 	RocketTrail->Deactivate();
 	if (ExplosionSound && GetNetMode() != NM_DedicatedServer)
@@ -628,6 +648,7 @@ void ARocketProjectile::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& Ou
 	DOREPLIFETIME(ARocketProjectile, LaunchData);
 	DOREPLIFETIME(ARocketProjectile, bExploded);
 	DOREPLIFETIME(ARocketProjectile, ExplosionLocation);
+	DOREPLIFETIME(ARocketProjectile, ExplosionImpact);
 	DOREPLIFETIME(ARocketProjectile, HomingNetState);
 	DOREPLIFETIME(ARocketProjectile, bHomingDisabled);
 }

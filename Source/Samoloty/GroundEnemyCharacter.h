@@ -7,11 +7,13 @@
 class UGroundEnemyAIComponent;
 class UBoxComponent;
 class UHealthComponent;
+class UHitRewindComponent;
 class UHomingMissileWeaponComponent;
 class UJetStatsComponent;
 class URifleGunComponent;
 class USceneComponent;
 class UWeaponSystemComponent;
+class UTargetIntentComponent;
 class UWorldNameComponent;
 
 /** Blueprint-ready enemy that walks on navigation and reuses the common combat components. */
@@ -39,6 +41,9 @@ protected:
 	TObjectPtr<UHealthComponent> Health;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Ground Enemy|Components")
+	TObjectPtr<UHitRewindComponent> HitRewind;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Ground Enemy|Components")
 	TObjectPtr<URifleGunComponent> RifleGun;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Ground Enemy|Components")
@@ -49,6 +54,9 @@ protected:
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Ground Enemy|Components")
 	TObjectPtr<UGroundEnemyAIComponent> EnemyAI;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Ground Enemy|Components")
+	TObjectPtr<UTargetIntentComponent> TargetIntent;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Ground Enemy|Components")
 	TObjectPtr<UWorldNameComponent> WorldName;

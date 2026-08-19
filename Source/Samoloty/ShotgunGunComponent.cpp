@@ -2,6 +2,7 @@
 
 #include "ArcadeFlightComponent.h"
 #include "HealthComponent.h"
+#include "HitRewindComponent.h"
 #include "GunAimAssistComponent.h"
 #include "JetStatsComponent.h"
 #include "RifleTracerVisual.h"
@@ -10,6 +11,7 @@
 #include "Engine/Engine.h"
 #include "Engine/World.h"
 #include "GameFramework/Pawn.h"
+#include "GameFramework/GameStateBase.h"
 #include "Kismet/GameplayStatics.h"
 #include "NiagaraFunctionLibrary.h"
 #include "Net/UnrealNetwork.h"
@@ -137,9 +139,16 @@ void UShotgunGunComponent::TickComponent(const float DeltaTime, const ELevelTick
 		FirePredictedBlast();
 		NextLocalShotTime = Now + ShotInterval;
 	}
-	if (GetOwner()->HasAuthority() && bServerFireHeld && Now >= NextServerShotTime)
+	if (GetOwner()->HasAuthority() && bServerFireHeld
+		&& (!Pawn || !Pawn->IsPlayerControlled()) && Now >= NextServerShotTime)
 	{
-		FireAuthoritativeBlast();
+		++ServerAiShotSequence;
+		if (ServerAiShotSequence == 0)
+		{
+			++ServerAiShotSequence;
+		}
+		FireAuthoritativeBlast(ServerAiShotSequence,
+			static_cast<uint8>((ServerAiShotSequence - 1) & 1));
 		NextServerShotTime = Now + ShotInterval;
 	}
 	DrawShotgunDebug();
@@ -154,39 +163,134 @@ void UShotgunGunComponent::OnWeaponEquippedChanged()
 	}
 }
 
-void UShotgunGunComponent::FirePredictedBlast()
+void UShotgunGunComponent::StartEquipCooldown()
 {
-	TArray<FVector_NetQuantize> PelletEnds;
-	TArray<uint8> HitFlags;
-	const int32 ShotSequence = LocalShotSequence++;
-	const uint8 MuzzleIndex = static_cast<uint8>(ShotSequence & 1);
-	BuildPelletPaths(false, ShotgunTuning::SeedOffset + ShotSequence, PelletEnds, HitFlags);
-	// Keep the weapon responsive, but never predict pellet impacts. Those are shown
-	// only after the server confirms its authoritative traces.
-	TArray<uint8> NoPredictedHits;
-	NoPredictedHits.Init(0, PelletEnds.Num());
-	PlayBlastVisual(PelletEnds, NoPredictedHits, MuzzleIndex);
+	const UJetStatsComponent* Stats = GetOwner()
+		? GetOwner()->FindComponentByClass<UJetStatsComponent>() : nullptr;
+	if (!GetWorld() || !Stats)
+	{
+		return;
+	}
+	const double ReadyTime = GetWorld()->GetTimeSeconds()
+		+ 1.0 / FMath::Max(0.1f, Stats->GetShotgunStats().ShotsPerSecond);
+	NextLocalShotTime = FMath::Max(NextLocalShotTime, ReadyTime);
+	if (GetOwner()->HasAuthority())
+	{
+		NextServerShotTime = FMath::Max(NextServerShotTime, ReadyTime);
+	}
 }
 
-void UShotgunGunComponent::FireAuthoritativeBlast()
+void UShotgunGunComponent::FirePredictedBlast()
 {
-	TArray<FVector_NetQuantize> PelletEnds;
-	TArray<uint8> HitFlags;
-	const int32 ShotSequence = ServerShotSequence++;
-	const uint8 MuzzleIndex = static_cast<uint8>(ShotSequence & 1);
-	const int32 PelletHits = BuildPelletPaths(
-		true, ShotgunTuning::SeedOffset + ShotSequence, PelletEnds, HitFlags);
-	if (PelletEnds.IsEmpty())
+	++LocalShotSequence;
+	if (LocalShotSequence == 0)
+	{
+		++LocalShotSequence;
+	}
+	const uint8 MuzzleIndex = static_cast<uint8>((LocalShotSequence - 1) & 1);
+	TArray<FCombatImpactEvent> PelletImpacts;
+	BuildPelletPaths(false, ShotgunTuning::SeedOffset + LocalShotSequence,
+		LocalShotSequence, PelletImpacts);
+	PredictedBlastImpacts.Add(LocalShotSequence, PelletImpacts);
+	PredictedBlastImpacts.Remove(static_cast<uint16>(LocalShotSequence - 16));
+	PlayBlastVisual(PelletImpacts, MuzzleIndex);
+
+	if (GetOwner()->HasAuthority())
+	{
+		HandleServerFireBlast(LocalShotSequence, MuzzleIndex,
+			LocalCameraOrigin, LocalCameraDirection, bLocalCameraAimEnabled,
+			GetEstimatedServerTime());
+	}
+	else
+	{
+		ServerFireBlast(LocalShotSequence, MuzzleIndex,
+			LocalCameraOrigin, LocalCameraDirection, bLocalCameraAimEnabled,
+			GetEstimatedServerTime());
+	}
+}
+
+void UShotgunGunComponent::ServerFireBlast_Implementation(
+	const uint16 Sequence, const uint8 MuzzleIndex,
+	const FVector_NetQuantize100 CameraOrigin,
+	const FVector_NetQuantizeNormal CameraDirection, const bool bUseCameraAim,
+	const double ClientFireServerTime)
+{
+	HandleServerFireBlast(Sequence, MuzzleIndex,
+		CameraOrigin, CameraDirection, bUseCameraAim, ClientFireServerTime);
+}
+
+void UShotgunGunComponent::HandleServerFireBlast(
+	const uint16 Sequence, const uint8 MuzzleIndex,
+	const FVector& CameraOrigin, const FVector& CameraDirection, const bool bUseCameraAim,
+	const double ClientFireServerTime)
+{
+	if (!GetOwner() || !GetOwner()->HasAuthority() || !IsWeaponEquipped()
+		|| IsOwnerFireBlocked())
+	{
+		return;
+	}
+	const UJetStatsComponent* Stats = GetOwner()->FindComponentByClass<UJetStatsComponent>();
+	const UHealthComponent* Health = GetOwner()->FindComponentByClass<UHealthComponent>();
+	const UArcadeFlightComponent* Flight = GetOwner()->FindComponentByClass<UArcadeFlightComponent>();
+	if (!Stats || (Health && Health->IsDead())
+		|| (Flight && Flight->GetHoverState() != EArcadeHoverState::Flying))
+	{
+		return;
+	}
+	const double Now = GetWorld()->GetTimeSeconds();
+	if (Now + 0.002 < NextServerShotTime)
+	{
+		return;
+	}
+	NextServerShotTime = Now
+		+ 1.0 / FMath::Max(0.1f, Stats->GetShotgunStats().ShotsPerSecond);
+	const FVector OwnerLocation = GetOwner()->GetActorLocation();
+	ServerCameraOrigin = OwnerLocation + (CameraOrigin - OwnerLocation)
+		.GetClampedToMaxSize(MaxCameraOriginDistance);
+	ServerCameraDirection = CameraDirection.GetSafeNormal(
+		UE_SMALL_NUMBER, GetOwner()->GetActorForwardVector());
+	bServerCameraAimEnabled = bUseCameraAim;
+	const double RewindTime = UHitRewindComponent::ClampRequestedServerTime(
+		Now, ClientFireServerTime);
+	FireAuthoritativeBlast(Sequence, MuzzleIndex & 1, RewindTime);
+}
+
+void UShotgunGunComponent::FireAuthoritativeBlast(
+	const uint16 Sequence, const uint8 MuzzleIndex, const double RewindServerTime)
+{
+	TArray<FCombatImpactEvent> PelletImpacts;
+	int32 PelletHits = 0;
+	{
+		FScopedHitboxRewind RewindScope(GetWorld(), RewindServerTime, GetOwner());
+		PelletHits = BuildPelletPaths(
+			true, ShotgunTuning::SeedOffset + Sequence, Sequence, PelletImpacts);
+	}
+	if (PelletImpacts.IsEmpty())
 	{
 		return;
 	}
 	++ServerBlastsFired;
 	ServerPelletHits += PelletHits;
-	MulticastPlayBlast(PelletEnds, HitFlags, MuzzleIndex);
+	MulticastPlayBlast(PelletImpacts, MuzzleIndex, Sequence);
+}
+
+double UShotgunGunComponent::GetEstimatedServerTime() const
+{
+	if (!GetWorld())
+	{
+		return 0.0;
+	}
+	if (const AGameStateBase* GameState = GetWorld()->GetGameState())
+	{
+		return UHitRewindComponent::EstimateClientViewServerTime(
+			GetOwner(), GameState->GetServerWorldTimeSeconds());
+	}
+	return UHitRewindComponent::EstimateClientViewServerTime(
+		GetOwner(), GetWorld()->GetTimeSeconds());
 }
 
 int32 UShotgunGunComponent::BuildPelletPaths(const bool bApplyDamage, const int32 ShotSeed,
-	TArray<FVector_NetQuantize>& OutPelletEnds, TArray<uint8>& OutHitFlags) const
+	const uint16 Sequence, TArray<FCombatImpactEvent>& OutPelletImpacts) const
 {
 	const UJetStatsComponent* StatsComponent = GetOwner()->FindComponentByClass<UJetStatsComponent>();
 	if (!StatsComponent || (!LeftMuzzle.IsValid() && !RightMuzzle.IsValid()))
@@ -196,8 +300,7 @@ int32 UShotgunGunComponent::BuildPelletPaths(const bool bApplyDamage, const int3
 
 	const FShotgunStats& Stats = StatsComponent->GetShotgunStats();
 	const int32 PelletCount = FMath::Max(1, Stats.PelletCount);
-	OutPelletEnds.Reserve(PelletCount);
-	OutHitFlags.Reserve(PelletCount);
+	OutPelletImpacts.Reserve(PelletCount);
 
 	const bool bUseCameraAim = bApplyDamage ? bServerCameraAimEnabled : bLocalCameraAimEnabled;
 	const FVector AimOrigin = bUseCameraAim
@@ -241,8 +344,11 @@ int32 UShotgunGunComponent::BuildPelletPaths(const bool bApplyDamage, const int3
 			}
 		}
 
-		OutPelletEnds.Add(PelletEnd);
-		OutHitFlags.Add(bHit ? 1 : 0);
+		OutPelletImpacts.Add(bHit
+			? FCombatImpactEvent::MakeFromHit(Sequence,
+				static_cast<uint8>(PelletIndex), Hit, -PelletDirection)
+			: FCombatImpactEvent::MakeMiss(Sequence,
+				static_cast<uint8>(PelletIndex), PelletEnd, PelletDirection));
 		if (bHit)
 		{
 			++PelletHits;
@@ -269,8 +375,8 @@ int32 UShotgunGunComponent::BuildPelletPaths(const bool bApplyDamage, const int3
 }
 
 void UShotgunGunComponent::MulticastPlayBlast_Implementation(
-	const TArray<FVector_NetQuantize>& PelletEnds, const TArray<uint8>& HitFlags,
-	const uint8 MuzzleIndex)
+	const TArray<FCombatImpactEvent>& PelletImpacts,
+	const uint8 MuzzleIndex, const uint16 Sequence)
 {
 	if (GetNetMode() == NM_DedicatedServer)
 	{
@@ -279,16 +385,16 @@ void UShotgunGunComponent::MulticastPlayBlast_Implementation(
 	const APawn* Pawn = Cast<APawn>(GetOwner());
 	if (Pawn && Pawn->IsLocallyControlled())
 	{
-		// Local tracers, muzzle flash and fire audio have already been predicted.
-		// Only add authoritative pellet impacts to avoid duplicate shot cosmetics.
-		PlayBlastImpacts(PelletEnds, HitFlags, MuzzleIndex);
+		const TArray<FCombatImpactEvent>* Predicted = PredictedBlastImpacts.Find(Sequence);
+		PlayConfirmedBlastImpacts(PelletImpacts, Predicted);
+		PredictedBlastImpacts.Remove(Sequence);
 		return;
 	}
-	PlayBlastVisual(PelletEnds, HitFlags, MuzzleIndex);
+	PlayBlastVisual(PelletImpacts, MuzzleIndex);
 }
 
-void UShotgunGunComponent::PlayBlastVisual(const TArray<FVector_NetQuantize>& PelletEnds,
-	const TArray<uint8>& HitFlags, const uint8 MuzzleIndex) const
+void UShotgunGunComponent::PlayBlastVisual(
+	const TArray<FCombatImpactEvent>& PelletImpacts, const uint8 MuzzleIndex) const
 {
 	const UJetStatsComponent* StatsComponent = GetOwner()->FindComponentByClass<UJetStatsComponent>();
 	if (!StatsComponent)
@@ -298,13 +404,14 @@ void UShotgunGunComponent::PlayBlastVisual(const TArray<FVector_NetQuantize>& Pe
 	const FShotgunStats& Stats = StatsComponent->GetShotgunStats();
 	bool bPlayedImpactSound = false;
 
-	for (int32 PelletIndex = 0; PelletIndex < PelletEnds.Num(); ++PelletIndex)
+	for (const FCombatImpactEvent& Impact : PelletImpacts)
 	{
 		const USceneComponent* Muzzle = GetMuzzle(MuzzleIndex);
 		const FVector Start = Muzzle ? Muzzle->GetComponentLocation() : GetOwner()->GetActorLocation();
-		const FVector End = FVector(PelletEnds[PelletIndex]);
+		FVector End;
+		FVector ImpactNormal;
+		Impact.Resolve(End, ImpactNormal);
 		const FVector Direction = (End - Start).GetSafeNormal();
-		const bool bHit = HitFlags.IsValidIndex(PelletIndex) && HitFlags[PelletIndex] != 0;
 
 		if (TracerVisualClass)
 		{
@@ -318,19 +425,21 @@ void UShotgunGunComponent::PlayBlastVisual(const TArray<FVector_NetQuantize>& Pe
 					Stats.TracerLength, Stats.TracerWidth);
 			}
 		}
-		if (bHit && ImpactEffect)
+		if (Impact.bBlockingHit && ImpactEffect)
 		{
 			UNiagaraFunctionLibrary::SpawnSystemAtLocation(
-				GetWorld(), ImpactEffect, End, (-Direction).Rotation());
+				GetWorld(), ImpactEffect, End, ImpactNormal.Rotation());
 		}
-		if (bHit && !bPlayedImpactSound && ShotgunImpactSound && GetNetMode() != NM_DedicatedServer)
+		if (Impact.bBlockingHit && !bPlayedImpactSound
+			&& ShotgunImpactSound && GetNetMode() != NM_DedicatedServer)
 		{
 			UGameplayStatics::SpawnSoundAtLocation(this, ShotgunImpactSound, End);
 			bPlayedImpactSound = true;
 		}
 		if (bDrawPelletDebug)
 		{
-			DrawDebugLine(GetWorld(), Start, End, bHit ? FColor::Red : FColor::Yellow,
+			DrawDebugLine(GetWorld(), Start, End,
+				Impact.bBlockingHit ? FColor::Red : FColor::Yellow,
 				false, 0.2f, 0, 1.0f);
 		}
 	}
@@ -354,28 +463,35 @@ void UShotgunGunComponent::PlayBlastVisual(const TArray<FVector_NetQuantize>& Pe
 	}
 }
 
-void UShotgunGunComponent::PlayBlastImpacts(
-	const TArray<FVector_NetQuantize>& PelletEnds,
-	const TArray<uint8>& HitFlags, const uint8 MuzzleIndex) const
+void UShotgunGunComponent::PlayConfirmedBlastImpacts(
+	const TArray<FCombatImpactEvent>& PelletImpacts,
+	const TArray<FCombatImpactEvent>* PredictedImpacts) const
 {
 	bool bPlayedImpactSound = false;
-	const USceneComponent* Muzzle = GetMuzzle(MuzzleIndex);
-	const FVector Start = Muzzle
-		? Muzzle->GetComponentLocation() : GetOwner()->GetActorLocation();
-
-	for (int32 PelletIndex = 0; PelletIndex < PelletEnds.Num(); ++PelletIndex)
+	for (const FCombatImpactEvent& Impact : PelletImpacts)
 	{
-		if (!HitFlags.IsValidIndex(PelletIndex) || HitFlags[PelletIndex] == 0)
+		if (!Impact.bBlockingHit)
 		{
 			continue;
 		}
-
-		const FVector End = FVector(PelletEnds[PelletIndex]);
-		const FVector Direction = (End - Start).GetSafeNormal();
+		const FCombatImpactEvent* Predicted = PredictedImpacts
+			? PredictedImpacts->FindByPredicate(
+				[&Impact](const FCombatImpactEvent& Candidate)
+				{
+					return Candidate.SubIndex == Impact.SubIndex;
+				})
+			: nullptr;
+		if (Predicted && Predicted->MatchesPredictedContact(Impact))
+		{
+			continue;
+		}
+		FVector End;
+		FVector ImpactNormal;
+		Impact.Resolve(End, ImpactNormal);
 		if (ImpactEffect)
 		{
 			UNiagaraFunctionLibrary::SpawnSystemAtLocation(
-				GetWorld(), ImpactEffect, End, (-Direction).Rotation());
+				GetWorld(), ImpactEffect, End, ImpactNormal.Rotation());
 		}
 		if (!bPlayedImpactSound && ShotgunImpactSound
 			&& GetNetMode() != NM_DedicatedServer)

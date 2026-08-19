@@ -3,8 +3,10 @@
 #include "AircraftCollisionComponent.h"
 #include "EnemyPlaneAIComponent.h"
 #include "HealthComponent.h"
+#include "HitRewindComponent.h"
 #include "JetStatsComponent.h"
 #include "RifleGunComponent.h"
+#include "TargetIntentComponent.h"
 #include "WorldNameComponent.h"
 #include "Components/BoxComponent.h"
 #include "Components/CapsuleComponent.h"
@@ -44,6 +46,7 @@ AEnemyPlanePawn::AEnemyPlanePawn()
 	RightWingHitbox->SetupAttachment(VisualRoot);
 	RightWingHitbox->SetRelativeLocation(FVector(0.0f, 115.0f, 0.0f));
 	AircraftCollision = CreateDefaultSubobject<UAircraftCollisionComponent>(TEXT("AircraftCollision"));
+	HitRewind = CreateDefaultSubobject<UHitRewindComponent>(TEXT("HitRewind"));
 	UAircraftCollisionComponent::ConfigureDamageHitbox(BodyHitbox);
 	UAircraftCollisionComponent::ConfigureDamageHitbox(LeftWingHitbox);
 	UAircraftCollisionComponent::ConfigureDamageHitbox(RightWingHitbox);
@@ -71,6 +74,7 @@ AEnemyPlanePawn::AEnemyPlanePawn()
 	Health = CreateDefaultSubobject<UHealthComponent>(TEXT("Health"));
 	RifleGun = CreateDefaultSubobject<URifleGunComponent>(TEXT("RifleGun"));
 	EnemyAI = CreateDefaultSubobject<UEnemyPlaneAIComponent>(TEXT("EnemyAI"));
+	TargetIntent = CreateDefaultSubobject<UTargetIntentComponent>(TEXT("TargetIntent"));
 	WorldName = CreateDefaultSubobject<UWorldNameComponent>(TEXT("WorldName"));
 	WorldName->SetDefaultDisplayName(NSLOCTEXT("WorldNames", "EnemyPlane", "Enemy Plane"));
 

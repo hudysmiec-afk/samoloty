@@ -6,6 +6,7 @@
 
 class UFlightHUDWidget;
 class UHealthComponent;
+class UTexture2D;
 class APawn;
 
 UCLASS()
@@ -73,9 +74,26 @@ protected:
 	UPROPERTY(EditDefaultsOnly, Category="Flight HUD|World Names")
 	FLinearColor PlayerNameColor = FLinearColor(0.35f, 0.85f, 1.0f, 1.0f);
 
+	UPROPERTY(EditDefaultsOnly, Category="Flight HUD|World Names")
+	TObjectPtr<UTexture2D> AttackerOnScreenTexture;
+
+	UPROPERTY(EditDefaultsOnly, Category="Flight HUD|World Names",
+		meta=(ClampMin="1"))
+	float AttackerOnScreenSize = 32.0f;
+
+	UPROPERTY(EditDefaultsOnly, Category="Flight HUD|World Names",
+		meta=(ClampMin="0"))
+	float AttackerOnScreenGap = 2.0f;
+
+	UPROPERTY(EditDefaultsOnly, Category="Flight HUD|World Names")
+	FLinearColor AttackerOnScreenColor = FLinearColor(1.0f, 0.04f, 0.02f, 1.0f);
+
 	TWeakObjectPtr<UHealthComponent> BoundHealthComponent;
 	TMap<TWeakObjectPtr<AActor>, double> RecentAttackersUntil;
 	TArray<FActiveDamageNumber> ActiveDamageNumbers;
 	TArray<TWeakObjectPtr<APawn>> CachedNameplateActors;
 	double NextNameplateActorRefreshTime = 0.0;
+	double NextPerformanceStatsUpdateTime = 0.0;
+	double NextAbilityCooldownUpdateTime = 0.0;
+	float SmoothedFPS = 0.0f;
 };

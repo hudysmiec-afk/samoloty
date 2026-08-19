@@ -41,6 +41,8 @@ public:
 	/** Short recovery window used only to let the local camera catch the teleported plane. */
 	UFUNCTION(BlueprintPure, Category="Plane|Mobility|Blink")
 	bool IsCameraRecovering() const;
+	void PlayPredictedActivationEffect(
+		const FVector& DepartureLocation, const FVector& ArrivalLocation);
 
 private:
 	bool CanActivate() const;

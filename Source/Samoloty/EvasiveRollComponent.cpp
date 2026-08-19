@@ -19,7 +19,7 @@ UEvasiveRollComponent::UEvasiveRollComponent()
 {
 	PrimaryComponentTick.bCanEverTick = true;
 	PrimaryComponentTick.TickGroup = TG_PostPhysics;
-	SetIsReplicatedByDefault(true);
+	SetIsReplicatedByDefault(false);
 }
 
 void UEvasiveRollComponent::BeginPlay()
@@ -142,31 +142,7 @@ void UEvasiveRollComponent::TickComponent(const float DeltaTime, const ELevelTic
 	FActorComponentTickFunction* ThisTickFunction)
 {
 	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
-
-	// Present the clamped end frame first. At or beyond the duration this applies
-	// an exact full revolution, which is transform-equivalent to zero. Clearing
-	// the state afterwards therefore cannot jump from a partial final angle.
 	UpdateVisualRoll();
-
-	if (GetOwner()->HasAuthority() && RollState.bActive
-		&& GetSynchronizedTime() - RollState.ServerStartTime >= EvasiveRollTuning::RollDuration)
-	{
-		RollState.bActive = false;
-		GetOwner()->ForceNetUpdate();
-	}
-	if (bLocalPredictionActive
-		&& GetLocalTime() - LocalPredictionStartTime >= EvasiveRollTuning::RollDuration)
-	{
-		bLocalPredictionActive = false;
-		// Do not fall back to the slightly delayed replicated timeline after the
-		// owning client has already presented a complete revolution.
-		bLocalPresentationFinished = true;
-	}
-
-	if (!IsRolling() || bLocalPresentationFinished)
-	{
-		UpdateVisualRoll();
-	}
 }
 
 void UEvasiveRollComponent::UpdateVisualRoll()
@@ -177,29 +153,15 @@ void UEvasiveRollComponent::UpdateVisualRoll()
 		return;
 	}
 
-	double Elapsed = 0.0;
-	EEvasiveRollDirection Direction = EEvasiveRollDirection::Left;
-	bool bHasVisualRoll = false;
-	if (bLocalPredictionActive)
-	{
-		Elapsed = GetLocalTime() - LocalPredictionStartTime;
-		Direction = LocalPredictionDirection;
-		bHasVisualRoll = true;
-	}
-	else if (!bLocalPresentationFinished && RollState.bActive)
-	{
-		Elapsed = GetSynchronizedTime() - RollState.ServerStartTime;
-		Direction = RollState.Direction;
-		bHasVisualRoll = true;
-	}
-
+	const bool bHasVisualRoll = CachedFlightComponent
+		&& CachedFlightComponent->IsEvasiveRollActive();
 	const float Progress = bHasVisualRoll
-		? FMath::Clamp(static_cast<float>(Elapsed / EvasiveRollTuning::RollDuration), 0.0f, 1.0f)
-		: 0.0f;
+		? CachedFlightComponent->GetEvasiveRollProgress() : 0.0f;
 	// Smooth acceleration at the beginning and deceleration at the end remove the
 	// one-frame lateral kick caused by instantly starting a full-speed orbit.
 	const float VisualProgress = Progress * Progress * (3.0f - 2.0f * Progress);
-	const float DirectionSign = Direction == EEvasiveRollDirection::Left ? -1.0f : 1.0f;
+	const float DirectionSign = bHasVisualRoll
+		? CachedFlightComponent->GetEvasiveRollDirection() : 1.0f;
 	const float RollDegrees = bHasVisualRoll ? DirectionSign * 360.0f * VisualProgress : 0.0f;
 	Plane->SetEvasiveRollPresentation(bHasVisualRoll, RollDegrees);
 }
@@ -230,33 +192,24 @@ void UEvasiveRollComponent::OnRep_RollState()
 
 bool UEvasiveRollComponent::IsRolling() const
 {
-	return bLocalPredictionActive || RollState.bActive;
+	return CachedFlightComponent && CachedFlightComponent->IsEvasiveRollActive();
 }
 
 bool UEvasiveRollComponent::IsRollManeuverInProgress() const
 {
-	if (bLocalPredictionActive)
-	{
-		return GetLocalTime() - LocalPredictionStartTime < EvasiveRollTuning::RollDuration;
-	}
-	return RollState.bActive
-		&& GetSynchronizedTime() - RollState.ServerStartTime < EvasiveRollTuning::RollDuration;
+	return IsRolling();
 }
 
 bool UEvasiveRollComponent::IsEvadingMissiles() const
 {
 	// Gameplay protection deliberately excludes unconfirmed client prediction.
-	return GetOwner() && GetOwner()->HasAuthority() && RollState.bActive
-		&& GetSynchronizedTime() - RollState.ServerStartTime < EvasiveRollTuning::RollDuration;
+	return GetOwner() && GetOwner()->HasAuthority() && IsRolling();
 }
 
 float UEvasiveRollComponent::GetCooldownRemaining() const
 {
-	const double EndTime = GetOwner() && GetOwner()->HasAuthority()
-		? NextAllowedServerTime : LocalNextAllowedTime;
-	const double Now = GetOwner() && GetOwner()->HasAuthority()
-		? GetSynchronizedTime() : GetLocalTime();
-	return static_cast<float>(FMath::Max(0.0, EndTime - Now));
+	return CachedFlightComponent
+		? CachedFlightComponent->GetEvasiveRollCooldownRemaining() : 0.0f;
 }
 
 double UEvasiveRollComponent::GetSynchronizedTime() const

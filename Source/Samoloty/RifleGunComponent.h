@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "CombatImpactTypes.h"
 #include "PlaneWeaponComponent.h"
 #include "RifleGunComponent.generated.h"
 
@@ -29,6 +30,7 @@ public:
 	virtual void SetFirePoints(USceneComponent* LeftPoint, USceneComponent* RightPoint) override;
 
 	virtual void SetFireHeld(bool bHeld) override;
+	virtual void StartEquipCooldown() override;
 	virtual bool GetCooldownStatus(float& OutRemainingSeconds,
 		float& OutDurationSeconds) const override;
 
@@ -75,19 +77,30 @@ private:
 		FVector_NetQuantizeNormal CameraDirection);
 
 	UFUNCTION(NetMulticast, Unreliable)
-	void MulticastPlayShot(FVector_NetQuantize Start, FVector_NetQuantize End,
-		FVector_NetQuantizeNormal Direction, uint8 MuzzleIndex, bool bHit);
+	void MulticastPlayShot(FVector_NetQuantize Start,
+		FVector_NetQuantizeNormal Direction, uint8 MuzzleIndex,
+		const FCombatImpactEvent& Impact);
 
-	void FireAuthoritativeShot();
+	UFUNCTION(Server, Unreliable)
+	void ServerFireShot(uint16 Sequence, uint8 MuzzleIndex,
+		FVector_NetQuantize100 CameraOrigin,
+		FVector_NetQuantizeNormal CameraDirection, bool bUseCameraAim,
+		double ClientFireServerTime);
+
+	void HandleServerFireShot(uint16 Sequence, uint8 MuzzleIndex,
+		const FVector& CameraOrigin, const FVector& CameraDirection, bool bUseCameraAim,
+		double ClientFireServerTime);
+	void FireAuthoritativeShot(uint16 Sequence, uint8 MuzzleIndex, double RewindServerTime = 0.0);
 	void FirePredictedShot();
-	void PlayShotVisual(const FVector& Start, const FVector& End, const FVector& Direction,
-		uint8 MuzzleIndex, bool bHit) const;
-	void PlayImpactVisual(const FVector& ImpactPoint, const FVector& ShotDirection) const;
+	void PlayShotVisual(const FVector& Start, const FVector& Direction,
+		uint8 MuzzleIndex, const FCombatImpactEvent& Impact) const;
+	void PlayImpactVisual(const FCombatImpactEvent& Impact) const;
 	bool BuildShot(uint8 MuzzleIndex, bool bApplyDamage, FVector& OutStart, FVector& OutEnd,
-		FVector& OutDirection, bool& bOutHit) const;
+		FVector& OutDirection, bool& bOutHit, FHitResult& OutHit) const;
 	FVector FindCameraAimPoint(const FVector& CameraOrigin, const FVector& CameraDirection,
 		float MaxRange, FHitResult& OutHit) const;
 	USceneComponent* GetMuzzle(uint8 MuzzleIndex) const;
+	double GetEstimatedServerTime() const;
 	void DrawRifleDebug() const;
 
 	TWeakObjectPtr<USceneComponent> LeftMuzzle;
@@ -104,6 +117,9 @@ private:
 	double NextAimUpdateTime = 0.0;
 	uint8 LocalMuzzleIndex = 0;
 	uint8 ServerMuzzleIndex = 0;
+	uint16 LocalShotSequence = 0;
+	uint16 ServerAiShotSequence = 0;
+	TMap<uint16, FCombatImpactEvent> PredictedImpacts;
 	double NextLocalShotTime = 0.0;
 	double NextServerShotTime = 0.0;
 	UPROPERTY(Replicated)

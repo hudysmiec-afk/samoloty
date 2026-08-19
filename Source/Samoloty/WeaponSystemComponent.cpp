@@ -82,6 +82,7 @@ void UWeaponSystemComponent::SetFireHeld(const EWeaponSlot Slot, const bool bHel
 	{
 		return;
 	}
+	GetFireHeldMutable(Slot) = bHeld;
 	if (UPlaneWeaponComponent* Weapon = GetActiveWeapon(Slot))
 	{
 		Weapon->SetFireHeld(bHeld);
@@ -94,16 +95,19 @@ void UWeaponSystemComponent::CycleWeapon(const EWeaponSlot Slot)
 	{
 		return;
 	}
-	// Test switching always releases the current weapon. The new weapon does not
-	// inherit a held trigger, preventing accidental fire and cooldown exploits.
-	SetFireHeld(Slot, false);
+	const bool bContinueFiring = GetFireHeld(Slot);
+	// Release the old implementation without clearing the physical trigger state.
+	if (UPlaneWeaponComponent* CurrentWeapon = GetActiveWeapon(Slot))
+	{
+		CurrentWeapon->SetFireHeld(false);
+	}
 	if (GetOwner()->HasAuthority())
 	{
-		CycleWeaponAuthoritative(Slot);
+		CycleWeaponAuthoritative(Slot, bContinueFiring);
 	}
 	else
 	{
-		ServerCycleWeapon(Slot);
+		ServerCycleWeapon(Slot, bContinueFiring);
 	}
 }
 
@@ -119,16 +123,18 @@ void UWeaponSystemComponent::RejectCurrentTarget(const EWeaponSlot Slot)
 	}
 }
 
-void UWeaponSystemComponent::ServerCycleWeapon_Implementation(const EWeaponSlot Slot)
+void UWeaponSystemComponent::ServerCycleWeapon_Implementation(
+	const EWeaponSlot Slot, const bool bContinueFiring)
 {
 	if (!IsValidWeaponSlot(Slot))
 	{
 		return;
 	}
-	CycleWeaponAuthoritative(Slot);
+	CycleWeaponAuthoritative(Slot, bContinueFiring);
 }
 
-void UWeaponSystemComponent::CycleWeaponAuthoritative(const EWeaponSlot Slot)
+void UWeaponSystemComponent::CycleWeaponAuthoritative(
+	const EWeaponSlot Slot, const bool bContinueFiring)
 {
 	TArray<TObjectPtr<UPlaneWeaponComponent>>& Weapons = GetWeaponsMutable(Slot);
 	if (Weapons.Num() == 0)
@@ -143,6 +149,11 @@ void UWeaponSystemComponent::CycleWeaponAuthoritative(const EWeaponSlot Slot)
 	int32& ActiveIndex = GetActiveIndexMutable(Slot);
 	ActiveIndex = (FMath::Clamp(ActiveIndex, 0, Weapons.Num() - 1) + 1) % Weapons.Num();
 	ApplySelection(Slot);
+	if (UPlaneWeaponComponent* NewWeapon = GetActiveWeapon(Slot))
+	{
+		NewWeapon->StartEquipCooldown();
+		NewWeapon->SetFireHeld(bContinueFiring);
+	}
 	GetOwner()->ForceNetUpdate();
 }
 
@@ -217,6 +228,11 @@ void UWeaponSystemComponent::OnRep_ActiveGunIndex()
 		DiscoverWeapons();
 	}
 	ApplySelection(EWeaponSlot::Gun);
+	if (UPlaneWeaponComponent* NewWeapon = GetActiveWeapon(EWeaponSlot::Gun))
+	{
+		NewWeapon->StartEquipCooldown();
+	}
+	ResumeHeldFireAfterSelection(EWeaponSlot::Gun);
 }
 
 void UWeaponSystemComponent::OnRep_ActiveMissileIndex()
@@ -226,6 +242,34 @@ void UWeaponSystemComponent::OnRep_ActiveMissileIndex()
 		DiscoverWeapons();
 	}
 	ApplySelection(EWeaponSlot::Missile);
+	if (UPlaneWeaponComponent* NewWeapon = GetActiveWeapon(EWeaponSlot::Missile))
+	{
+		NewWeapon->StartEquipCooldown();
+	}
+	ResumeHeldFireAfterSelection(EWeaponSlot::Missile);
+}
+
+bool& UWeaponSystemComponent::GetFireHeldMutable(const EWeaponSlot Slot)
+{
+	return Slot == EWeaponSlot::Gun ? bGunFireHeld : bMissileFireHeld;
+}
+
+bool UWeaponSystemComponent::GetFireHeld(const EWeaponSlot Slot) const
+{
+	return Slot == EWeaponSlot::Gun ? bGunFireHeld : bMissileFireHeld;
+}
+
+void UWeaponSystemComponent::ResumeHeldFireAfterSelection(const EWeaponSlot Slot)
+{
+	const APawn* OwnerPawn = Cast<APawn>(GetOwner());
+	if (!OwnerPawn || !OwnerPawn->IsLocallyControlled() || !GetFireHeld(Slot))
+	{
+		return;
+	}
+	if (UPlaneWeaponComponent* Weapon = GetActiveWeapon(Slot))
+	{
+		Weapon->SetFireHeld(true);
+	}
 }
 
 TArray<TObjectPtr<UPlaneWeaponComponent>>& UWeaponSystemComponent::GetWeaponsMutable(const EWeaponSlot Slot)

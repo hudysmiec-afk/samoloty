@@ -73,14 +73,11 @@ public:
 		FVector& OutVelocity, float& OutSignedForwardSpeed);
 
 	UFUNCTION(BlueprintPure, Category="Plane|Mobility|Quick Reversal")
-	bool IsReversalActive() const { return ReversalState.bActive; }
+	bool IsReversalActive() const;
 
 	/** True from the local activation request until the maneuver camera finishes turning. */
 	UFUNCTION(BlueprintPure, Category="Plane|Mobility|Quick Reversal")
-	bool IsWeaponFireBlocked() const
-	{
-		return ReversalState.bActive || bLocalActivationPending;
-	}
+	bool IsWeaponFireBlocked() const;
 
 	UFUNCTION(BlueprintPure, Category="Plane|Mobility|Quick Reversal")
 	float GetCooldownRemaining() const;
@@ -105,6 +102,7 @@ public:
 
 	/** Restores regular turn/strafe bank after the nose-up part is complete. */
 	float GetFlightBankBlendAlpha() const;
+	void PlayPredictedActivationEffect();
 
 private:
 	UFUNCTION(Server, Reliable)

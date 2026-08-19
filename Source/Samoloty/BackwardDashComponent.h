@@ -54,12 +54,13 @@ public:
 		FVector& OutVelocity, float& OutSignedForwardSpeed);
 
 	UFUNCTION(BlueprintPure, Category="Plane|Mobility|Backward Dash")
-	bool IsDashActive() const { return DashState.bActive; }
+	bool IsDashActive() const;
 
 	UFUNCTION(BlueprintPure, Category="Plane|Mobility|Backward Dash")
 	float GetCooldownRemaining() const;
 
 	float GetManeuverProgress() const;
+	void PlayPredictedActivationEffect();
 
 private:
 	UFUNCTION(Server, Reliable)

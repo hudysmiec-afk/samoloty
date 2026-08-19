@@ -52,7 +52,7 @@ public:
 		float& OutSignedForwardSpeed);
 
 	UFUNCTION(BlueprintPure, Category="Plane|Mobility|Forward Dash")
-	bool IsDashActive() const { return DashState.bActive; }
+	bool IsDashActive() const;
 
 	UFUNCTION(BlueprintPure, Category="Plane|Mobility|Forward Dash")
 	float GetCooldownRemaining() const;
@@ -61,6 +61,7 @@ public:
 	float GetManeuverProgress() const;
 
 	float GetMaximumSpeed(float NormalForwardSpeed) const;
+	void PlayPredictedActivationEffect();
 
 private:
 	UFUNCTION()

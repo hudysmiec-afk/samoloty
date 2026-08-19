@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "CombatImpactTypes.h"
 #include "GameFramework/Actor.h"
 #include "RocketProjectile.generated.h"
 
@@ -169,7 +170,8 @@ private:
 	void BreakHomingAfterEvade(AActor* EvadingActor);
 	FVector RotateDirectionTowards(const FVector& CurrentDirection,
 		const FVector& DesiredDirection, float DeltaSeconds) const;
-	void Explode(AActor* DamageTarget, const FVector& ImpactLocation);
+	void Explode(AActor* DamageTarget, const FVector& ImpactLocation,
+		const FHitResult* PhysicalHit = nullptr);
 	void PlayExplosionCosmetics();
 
 	UPROPERTY(ReplicatedUsing=OnRep_LaunchData)
@@ -180,6 +182,9 @@ private:
 
 	UPROPERTY(Replicated)
 	FVector_NetQuantize100 ExplosionLocation;
+
+	UPROPERTY(Replicated)
+	FCombatImpactEvent ExplosionImpact;
 
 	UPROPERTY(ReplicatedUsing=OnRep_HomingNetState)
 	FHomingMissileNetState HomingNetState;

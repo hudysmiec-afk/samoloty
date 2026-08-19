@@ -8,7 +8,7 @@ public class Samoloty : ModuleRules
 	{
 		PCHUsage = PCHUsageMode.UseExplicitOrSharedPCHs;
 	
-		PublicDependencyModuleNames.AddRange(new string[] { "Core", "CoreUObject", "Engine", "InputCore", "EnhancedInput", "Niagara", "UMG" });
+		PublicDependencyModuleNames.AddRange(new string[] { "Core", "CoreUObject", "Engine", "InputCore", "EnhancedInput", "Niagara", "UMG", "NetCore", "NetworkPrediction" });
 
 		PrivateDependencyModuleNames.AddRange(new string[] { "Slate", "SlateCore", "AIModule", "NavigationSystem" });
 

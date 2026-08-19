@@ -9,6 +9,8 @@
 #include "GameFramework/GameModeBase.h"
 #include "GameFramework/Pawn.h"
 #include "Kismet/GameplayStatics.h"
+#include "NiagaraFunctionLibrary.h"
+#include "NiagaraSystem.h"
 #include "Net/UnrealNetwork.h"
 
 UHealthComponent::UHealthComponent()
@@ -84,6 +86,10 @@ void UHealthComponent::HandleAnyDamage(AActor* DamagedActor, const float Damage,
 	{
 		bIsDead = true;
 		OnHealthDepleted.Broadcast();
+		FVector DeathLocation = GetOwner()->GetActorLocation();
+		FVector DeathExtent = FVector::ZeroVector;
+		GetOwner()->GetActorBounds(true, DeathLocation, DeathExtent);
+		MulticastPlayDeathEffect(DeathLocation, GetOwner()->GetActorRotation());
 		if (APawn* DeadPawn = Cast<APawn>(GetOwner()); DeadPawn && DeadPawn->IsPlayerControlled())
 		{
 			if (AArcadeFlightGameMode* FlightGameMode =
@@ -93,6 +99,28 @@ void UHealthComponent::HandleAnyDamage(AActor* DamagedActor, const float Damage,
 			}
 		}
 		GetOwner()->Destroy();
+	}
+}
+
+void UHealthComponent::MulticastPlayDeathEffect_Implementation(
+	const FVector_NetQuantize Location, const FRotator Rotation)
+{
+	if (GetNetMode() == NM_DedicatedServer)
+	{
+		return;
+	}
+	if (DeathEffect)
+	{
+		UNiagaraFunctionLibrary::SpawnSystemAtLocation(
+			this, DeathEffect, Location, Rotation,
+			FVector(FMath::Max(0.01f, DeathEffectScale)), true, true,
+			ENCPoolMethod::AutoRelease, true);
+	}
+	if (DeathSound)
+	{
+		UGameplayStatics::SpawnSoundAtLocation(
+			this, DeathSound, Location, Rotation,
+			FMath::Max(0.0f, DeathSoundVolume));
 	}
 }
 

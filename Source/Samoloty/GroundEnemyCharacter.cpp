@@ -4,10 +4,12 @@
 #include "AircraftCollisionComponent.h"
 #include "GroundEnemyAIComponent.h"
 #include "HealthComponent.h"
+#include "HitRewindComponent.h"
 #include "HomingMissileWeaponComponent.h"
 #include "JetStatsComponent.h"
 #include "PlaneWeaponComponent.h"
 #include "RifleGunComponent.h"
+#include "TargetIntentComponent.h"
 #include "WeaponSystemComponent.h"
 #include "WorldNameComponent.h"
 #include "Components/CapsuleComponent.h"
@@ -68,10 +70,12 @@ AGroundEnemyCharacter::AGroundEnemyCharacter()
 	JetStats->SetBaseHomingMissileStats(MissileStats);
 
 	Health = CreateDefaultSubobject<UHealthComponent>(TEXT("Health"));
+	HitRewind = CreateDefaultSubobject<UHitRewindComponent>(TEXT("HitRewind"));
 	RifleGun = CreateDefaultSubobject<URifleGunComponent>(TEXT("RifleGun"));
 	HomingMissiles = CreateDefaultSubobject<UHomingMissileWeaponComponent>(TEXT("HomingMissiles"));
 	WeaponSystem = CreateDefaultSubobject<UWeaponSystemComponent>(TEXT("WeaponSystem"));
 	EnemyAI = CreateDefaultSubobject<UGroundEnemyAIComponent>(TEXT("EnemyAI"));
+	TargetIntent = CreateDefaultSubobject<UTargetIntentComponent>(TEXT("TargetIntent"));
 	WorldName = CreateDefaultSubobject<UWorldNameComponent>(TEXT("WorldName"));
 	WorldName->SetDefaultDisplayName(NSLOCTEXT("WorldNames", "GroundEnemy", "Ground Enemy"));
 

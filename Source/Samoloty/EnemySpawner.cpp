@@ -1,6 +1,7 @@
 #include "EnemySpawner.h"
 
 #include "AI/NavigationSystemBase.h"
+#include "Components/CapsuleComponent.h"
 #include "Engine/World.h"
 #include "GameFramework/Pawn.h"
 #include "NavigationSystem.h"
@@ -49,18 +50,25 @@ bool AEnemySpawner::SpawnEnemy()
 		return false;
 	}
 
-	FTransform SpawnTransform;
-	if (!FindSpawnTransform(SpawnTransform))
+	APawn* SpawnedEnemy = nullptr;
+	for (int32 Attempt = 0; Attempt < FMath::Max(1, MaxSpawnAttempts); ++Attempt)
 	{
-		return false;
+		FTransform SpawnTransform;
+		if (!FindSpawnTransform(SpawnTransform))
+		{
+			continue;
+		}
+		FActorSpawnParameters SpawnParameters;
+		SpawnParameters.Owner = this;
+		SpawnParameters.SpawnCollisionHandlingOverride =
+			ESpawnActorCollisionHandlingMethod::DontSpawnIfColliding;
+		SpawnedEnemy = GetWorld()->SpawnActor<APawn>(
+			EnemyClass, SpawnTransform, SpawnParameters);
+		if (SpawnedEnemy)
+		{
+			break;
+		}
 	}
-
-	FActorSpawnParameters SpawnParameters;
-	SpawnParameters.Owner = this;
-	SpawnParameters.SpawnCollisionHandlingOverride =
-		ESpawnActorCollisionHandlingMethod::AdjustIfPossibleButDontSpawnIfColliding;
-	APawn* SpawnedEnemy = GetWorld()->SpawnActor<APawn>(
-		EnemyClass, SpawnTransform, SpawnParameters);
 	if (!SpawnedEnemy)
 	{
 		return false;
@@ -166,9 +174,28 @@ bool AEnemySpawner::FindSpawnTransform(FTransform& OutTransform) const
 			return false;
 		}
 		SpawnLocation = ProjectedLocation.Location;
+		if (const APawn* DefaultPawn = EnemyClass->GetDefaultObject<APawn>())
+		{
+			if (const UCapsuleComponent* Capsule =
+				DefaultPawn->FindComponentByClass<UCapsuleComponent>())
+			{
+				SpawnLocation.Z += Capsule->GetScaledCapsuleHalfHeight()
+					+ GroundSpawnClearance;
+			}
+		}
 	}
 
 	SpawnLocation.Z += SpawnHeightOffset;
+	const float MinSeparationSquared = FMath::Square(MinimumSpawnSeparation);
+	for (const APawn* ExistingEnemy : SpawnedEnemies)
+	{
+		if (IsValid(ExistingEnemy)
+			&& FVector::DistSquared2D(ExistingEnemy->GetActorLocation(), SpawnLocation)
+				< MinSeparationSquared)
+		{
+			return false;
+		}
+	}
 	FRotator SpawnRotation = GetActorRotation();
 	if (bRandomizeYaw)
 	{

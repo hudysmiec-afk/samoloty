@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "CombatImpactTypes.h"
 #include "PlaneWeaponComponent.h"
 #include "ShotgunGunComponent.generated.h"
 
@@ -22,6 +23,7 @@ public:
 	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
 
 	virtual void SetFireHeld(bool bHeld) override;
+	virtual void StartEquipCooldown() override;
 	virtual bool GetCooldownStatus(float& OutRemainingSeconds,
 		float& OutDurationSeconds) const override;
 	virtual void SetAimContext(const FVector& AimOrigin, const FVector& AimDirection) override;
@@ -71,18 +73,29 @@ private:
 		FVector_NetQuantizeNormal CameraDirection);
 
 	UFUNCTION(NetMulticast, Unreliable)
-	void MulticastPlayBlast(const TArray<FVector_NetQuantize>& PelletEnds,
-		const TArray<uint8>& HitFlags, uint8 MuzzleIndex);
+	void MulticastPlayBlast(const TArray<FCombatImpactEvent>& PelletImpacts,
+		uint8 MuzzleIndex, uint16 Sequence);
+
+	UFUNCTION(Server, Unreliable)
+	void ServerFireBlast(uint16 Sequence, uint8 MuzzleIndex,
+		FVector_NetQuantize100 CameraOrigin,
+		FVector_NetQuantizeNormal CameraDirection, bool bUseCameraAim,
+		double ClientFireServerTime);
 
 	void FirePredictedBlast();
-	void FireAuthoritativeBlast();
+	void HandleServerFireBlast(uint16 Sequence, uint8 MuzzleIndex,
+		const FVector& CameraOrigin, const FVector& CameraDirection, bool bUseCameraAim,
+		double ClientFireServerTime);
+	void FireAuthoritativeBlast(uint16 Sequence, uint8 MuzzleIndex,
+		double RewindServerTime = 0.0);
 	int32 BuildPelletPaths(bool bApplyDamage, int32 ShotSeed,
-		TArray<FVector_NetQuantize>& OutPelletEnds, TArray<uint8>& OutHitFlags) const;
-	void PlayBlastVisual(const TArray<FVector_NetQuantize>& PelletEnds,
-		const TArray<uint8>& HitFlags, uint8 MuzzleIndex) const;
-	void PlayBlastImpacts(const TArray<FVector_NetQuantize>& PelletEnds,
-		const TArray<uint8>& HitFlags, uint8 MuzzleIndex) const;
+		uint16 Sequence, TArray<FCombatImpactEvent>& OutPelletImpacts) const;
+	void PlayBlastVisual(const TArray<FCombatImpactEvent>& PelletImpacts,
+		uint8 MuzzleIndex) const;
+	void PlayConfirmedBlastImpacts(const TArray<FCombatImpactEvent>& PelletImpacts,
+		const TArray<FCombatImpactEvent>* PredictedImpacts) const;
 	USceneComponent* GetMuzzle(uint8 MuzzleIndex) const;
+	double GetEstimatedServerTime() const;
 	void DrawShotgunDebug() const;
 
 	TWeakObjectPtr<USceneComponent> LeftMuzzle;
@@ -98,8 +111,9 @@ private:
 	double NextAimUpdateTime = 0.0;
 	double NextLocalShotTime = 0.0;
 	double NextServerShotTime = 0.0;
-	int32 LocalShotSequence = 0;
-	int32 ServerShotSequence = 0;
+	uint16 LocalShotSequence = 0;
+	uint16 ServerAiShotSequence = 0;
+	TMap<uint16, TArray<FCombatImpactEvent>> PredictedBlastImpacts;
 
 	UPROPERTY(Replicated)
 	int32 ServerBlastsFired = 0;

@@ -23,7 +23,7 @@ namespace ForwardDashTuning
 UForwardDashComponent::UForwardDashComponent()
 {
 	PrimaryComponentTick.bCanEverTick = false;
-	SetIsReplicatedByDefault(true);
+	SetIsReplicatedByDefault(false);
 }
 
 void UForwardDashComponent::BeginPlay()
@@ -127,6 +127,12 @@ void UForwardDashComponent::OnRep_DashState()
 }
 
 void UForwardDashComponent::MulticastPlayForwardDashSound_Implementation()
+
+{
+	PlayPredictedActivationEffect();
+}
+
+void UForwardDashComponent::PlayPredictedActivationEffect()
 {
 	if (GetNetMode() == NM_DedicatedServer || !GetOwner())
 	{
@@ -150,24 +156,21 @@ void UForwardDashComponent::MulticastPlayForwardDashSound_Implementation()
 	}
 }
 
+bool UForwardDashComponent::IsDashActive() const
+{
+	return CachedFlightComponent && CachedFlightComponent->IsForwardDashActive();
+}
+
 float UForwardDashComponent::GetCooldownRemaining() const
 {
-	const double EndTime = GetOwner() && GetOwner()->HasAuthority()
-		? NextAllowedServerTime
-		: DashState.ServerStartTime + ForwardDashTuning::Cooldown;
-	return static_cast<float>(FMath::Max(
-		0.0, EndTime - GetSynchronizedTime()));
+	return CachedFlightComponent
+		? CachedFlightComponent->GetForwardDashCooldownRemaining() : 0.0f;
 }
 
 float UForwardDashComponent::GetManeuverProgress() const
 {
-	if (!DashState.bActive)
-	{
-		return 0.0f;
-	}
-	return FMath::Clamp(static_cast<float>(
-		(GetSynchronizedTime() - DashState.ServerStartTime)
-		/ ForwardDashTuning::Duration), 0.0f, 1.0f);
+	return CachedFlightComponent && CachedFlightComponent->IsForwardDashActive()
+		? CachedFlightComponent->GetMobilityProgress() : 0.0f;
 }
 
 float UForwardDashComponent::GetMaximumSpeed(const float NormalForwardSpeed) const

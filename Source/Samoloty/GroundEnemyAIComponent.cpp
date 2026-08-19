@@ -8,6 +8,7 @@
 #include "NavigationSystem.h"
 #include "Navigation/PathFollowingComponent.h"
 #include "RifleGunComponent.h"
+#include "TargetIntentComponent.h"
 #include "EngineUtils.h"
 #include "GameFramework/Pawn.h"
 
@@ -195,6 +196,11 @@ void UGroundEnemyAIComponent::SetCurrentTarget(APawn* NewTarget)
 		return;
 	}
 	CurrentTarget = NewTarget;
+	if (UTargetIntentComponent* TargetIntent = GetOwner()
+		? GetOwner()->FindComponentByClass<UTargetIntentComponent>() : nullptr)
+	{
+		TargetIntent->SetCurrentTarget(NewTarget);
+	}
 	State = EGroundEnemyState::Chasing;
 	RepathTimeRemaining = 0.0f;
 	if (AIController)
@@ -206,6 +212,11 @@ void UGroundEnemyAIComponent::SetCurrentTarget(APawn* NewTarget)
 void UGroundEnemyAIComponent::ClearCurrentTarget()
 {
 	CurrentTarget.Reset();
+	if (UTargetIntentComponent* TargetIntent = GetOwner()
+		? GetOwner()->FindComponentByClass<UTargetIntentComponent>() : nullptr)
+	{
+		TargetIntent->SetCurrentTarget(nullptr);
+	}
 	StopWeapons();
 	if (AIController)
 	{

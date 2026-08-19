@@ -41,7 +41,7 @@ public:
 
 private:
 	UFUNCTION(Server, Reliable)
-	void ServerCycleWeapon(EWeaponSlot Slot);
+	void ServerCycleWeapon(EWeaponSlot Slot, bool bContinueFiring);
 
 	UFUNCTION()
 	void OnRep_ActiveGunIndex();
@@ -51,7 +51,10 @@ private:
 
 	void DiscoverWeapons();
 	void ApplySelection(EWeaponSlot Slot);
-	void CycleWeaponAuthoritative(EWeaponSlot Slot);
+	void CycleWeaponAuthoritative(EWeaponSlot Slot, bool bContinueFiring);
+	bool& GetFireHeldMutable(EWeaponSlot Slot);
+	bool GetFireHeld(EWeaponSlot Slot) const;
+	void ResumeHeldFireAfterSelection(EWeaponSlot Slot);
 	void DrawWeaponSystemDebug() const;
 	TArray<TObjectPtr<UPlaneWeaponComponent>>& GetWeaponsMutable(EWeaponSlot Slot);
 	const TArray<TObjectPtr<UPlaneWeaponComponent>>& GetWeapons(EWeaponSlot Slot) const;
@@ -75,4 +78,6 @@ private:
 	TWeakObjectPtr<USceneComponent> MissileLeftPoint;
 	TWeakObjectPtr<USceneComponent> MissileRightPoint;
 	bool bWeaponsDiscovered = false;
+	bool bGunFireHeld = false;
+	bool bMissileFireHeld = false;
 };

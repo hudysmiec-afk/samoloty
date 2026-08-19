@@ -6,6 +6,7 @@
 
 class UButton;
 class UEditableTextBox;
+class UGraphicsSettingsWidget;
 class UTextBlock;
 
 /** C++ logic base for the visual WBP_MainMenu widget. */
@@ -13,6 +14,9 @@ UCLASS(Blueprintable)
 class SAMOLOTY_API UMainMenuWidget : public UUserWidget
 {
 	GENERATED_BODY()
+
+public:
+	UMainMenuWidget(const FObjectInitializer& ObjectInitializer);
 
 protected:
 	virtual void NativeConstruct() override;
@@ -41,9 +45,16 @@ protected:
 	UPROPERTY(BlueprintReadOnly, meta=(BindWidgetOptional))
 	TObjectPtr<UTextBlock> TXT_Status;
 
-	/** Implement this in WBP_MainMenu when the settings panel is added. */
-	UFUNCTION(BlueprintImplementableEvent, Category="Menu")
+	/** Opens the reusable settings overlay. Blueprints may override presentation. */
+	UFUNCTION(BlueprintNativeEvent, Category="Menu")
 	void OpenSettingsPanel();
+	virtual void OpenSettingsPanel_Implementation();
+
+	UPROPERTY(EditDefaultsOnly, Category="Menu")
+	TSoftClassPtr<UGraphicsSettingsWidget> SettingsWidgetClass;
+
+	UPROPERTY(Transient)
+	TObjectPtr<UGraphicsSettingsWidget> SettingsWidget;
 
 private:
 	UFUNCTION()

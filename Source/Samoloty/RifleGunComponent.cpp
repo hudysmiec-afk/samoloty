@@ -2,6 +2,7 @@
 
 #include "ArcadeFlightComponent.h"
 #include "HealthComponent.h"
+#include "HitRewindComponent.h"
 #include "GunAimAssistComponent.h"
 #include "JetStatsComponent.h"
 #include "RifleTracerVisual.h"
@@ -10,6 +11,7 @@
 #include "Engine/Engine.h"
 #include "Engine/World.h"
 #include "GameFramework/Pawn.h"
+#include "GameFramework/GameStateBase.h"
 #include "Kismet/GameplayStatics.h"
 #include "NiagaraFunctionLibrary.h"
 #include "Net/UnrealNetwork.h"
@@ -161,9 +163,15 @@ void URifleGunComponent::TickComponent(const float DeltaTime, const ELevelTick T
 		FirePredictedShot();
 		NextLocalShotTime = Now + ShotInterval;
 	}
-	if (GetOwner()->HasAuthority() && bServerFireHeld && Now >= NextServerShotTime)
+	if (GetOwner()->HasAuthority() && bServerFireHeld
+		&& (!Pawn || !Pawn->IsPlayerControlled()) && Now >= NextServerShotTime)
 	{
-		FireAuthoritativeShot();
+		++ServerAiShotSequence;
+		if (ServerAiShotSequence == 0)
+		{
+			++ServerAiShotSequence;
+		}
+		FireAuthoritativeShot(ServerAiShotSequence, ServerMuzzleIndex);
 		NextServerShotTime = Now + ShotInterval;
 	}
 	DrawRifleDebug();
@@ -178,33 +186,146 @@ void URifleGunComponent::OnWeaponEquippedChanged()
 	}
 }
 
+void URifleGunComponent::StartEquipCooldown()
+{
+	const UJetStatsComponent* Stats = GetOwner()
+		? GetOwner()->FindComponentByClass<UJetStatsComponent>() : nullptr;
+	if (!GetWorld() || !Stats)
+	{
+		return;
+	}
+	const double ReadyTime = GetWorld()->GetTimeSeconds()
+		+ 1.0 / FMath::Max(0.1f, Stats->GetRifleGunStats().ShotsPerSecond);
+	NextLocalShotTime = FMath::Max(NextLocalShotTime, ReadyTime);
+	if (GetOwner()->HasAuthority())
+	{
+		NextServerShotTime = FMath::Max(NextServerShotTime, ReadyTime);
+	}
+}
+
 void URifleGunComponent::FirePredictedShot()
 {
 	FVector Start, End, Direction;
 	bool bHit = false;
-	BuildShot(LocalMuzzleIndex, false, Start, End, Direction, bHit);
-	// The muzzle flash and tracer are predicted for responsive controls, but an impact
-	// must never be predicted. Only the server-confirmed trace may display it.
-	PlayShotVisual(Start, End, Direction, LocalMuzzleIndex, false);
-	LocalMuzzleIndex ^= 1;
-}
-
-void URifleGunComponent::FireAuthoritativeShot()
-{
-	FVector Start, End, Direction;
-	bool bHit = false;
-	if (!BuildShot(ServerMuzzleIndex, true, Start, End, Direction, bHit))
+	FHitResult Hit;
+	if (!BuildShot(LocalMuzzleIndex, false, Start, End, Direction, bHit, Hit))
 	{
 		return;
 	}
+	++LocalShotSequence;
+	if (LocalShotSequence == 0)
+	{
+		++LocalShotSequence;
+	}
+	const FCombatImpactEvent PredictedImpact = bHit
+		? FCombatImpactEvent::MakeFromHit(LocalShotSequence, 0, Hit, -Direction)
+		: FCombatImpactEvent::MakeMiss(LocalShotSequence, 0, End, Direction);
+	PredictedImpacts.Add(LocalShotSequence, PredictedImpact);
+	PredictedImpacts.Remove(static_cast<uint16>(LocalShotSequence - 64));
+	PlayShotVisual(Start, Direction, LocalMuzzleIndex, PredictedImpact);
+
+	if (GetOwner()->HasAuthority())
+	{
+		HandleServerFireShot(LocalShotSequence, LocalMuzzleIndex,
+			LocalCameraOrigin, LocalCameraDirection, bLocalCameraAimEnabled,
+			GetEstimatedServerTime());
+	}
+	else
+	{
+		ServerFireShot(LocalShotSequence, LocalMuzzleIndex,
+			LocalCameraOrigin, LocalCameraDirection, bLocalCameraAimEnabled,
+			GetEstimatedServerTime());
+	}
+	LocalMuzzleIndex ^= 1;
+}
+
+void URifleGunComponent::ServerFireShot_Implementation(
+	const uint16 Sequence, const uint8 MuzzleIndex,
+	const FVector_NetQuantize100 CameraOrigin,
+	const FVector_NetQuantizeNormal CameraDirection, const bool bUseCameraAim,
+	const double ClientFireServerTime)
+{
+	HandleServerFireShot(Sequence, MuzzleIndex, CameraOrigin, CameraDirection,
+		bUseCameraAim, ClientFireServerTime);
+}
+
+void URifleGunComponent::HandleServerFireShot(
+	const uint16 Sequence, const uint8 MuzzleIndex,
+	const FVector& CameraOrigin, const FVector& CameraDirection, const bool bUseCameraAim,
+	const double ClientFireServerTime)
+{
+	if (!GetOwner() || !GetOwner()->HasAuthority() || !IsWeaponEquipped()
+		|| IsOwnerFireBlocked())
+	{
+		return;
+	}
+	const UJetStatsComponent* Stats = GetOwner()->FindComponentByClass<UJetStatsComponent>();
+	const UHealthComponent* Health = GetOwner()->FindComponentByClass<UHealthComponent>();
+	const UArcadeFlightComponent* Flight = GetOwner()->FindComponentByClass<UArcadeFlightComponent>();
+	if (!Stats || (Health && Health->IsDead())
+		|| (Flight && Flight->GetHoverState() != EArcadeHoverState::Flying))
+	{
+		return;
+	}
+	const double Now = GetWorld()->GetTimeSeconds();
+	if (Now + 0.002 < NextServerShotTime)
+	{
+		return;
+	}
+	NextServerShotTime = Now
+		+ 1.0 / FMath::Max(0.1f, Stats->GetRifleGunStats().ShotsPerSecond);
+	const FVector OwnerLocation = GetOwner()->GetActorLocation();
+	ServerCameraOrigin = OwnerLocation + (CameraOrigin - OwnerLocation)
+		.GetClampedToMaxSize(MaxCameraOriginDistance);
+	ServerCameraDirection = CameraDirection.GetSafeNormal(
+		UE_SMALL_NUMBER, GetOwner()->GetActorForwardVector());
+	bServerCameraAimEnabled = bUseCameraAim;
+	const double RewindTime = UHitRewindComponent::ClampRequestedServerTime(
+		Now, ClientFireServerTime);
+	FireAuthoritativeShot(Sequence, MuzzleIndex & 1, RewindTime);
+}
+
+void URifleGunComponent::FireAuthoritativeShot(
+	const uint16 Sequence, const uint8 MuzzleIndex, const double RewindServerTime)
+{
+	FVector Start, End, Direction;
+	bool bHit = false;
+	FHitResult Hit;
+	FCombatImpactEvent Impact;
+	{
+		FScopedHitboxRewind RewindScope(GetWorld(), RewindServerTime, GetOwner());
+		if (!BuildShot(MuzzleIndex, true, Start, End, Direction, bHit, Hit))
+		{
+			return;
+		}
+		Impact = bHit
+			? FCombatImpactEvent::MakeFromHit(Sequence, 0, Hit, -Direction)
+			: FCombatImpactEvent::MakeMiss(Sequence, 0, End, Direction);
+	}
 	++ServerShotsFired;
 	ServerHits += bHit ? 1 : 0;
-	MulticastPlayShot(Start, End, Direction, ServerMuzzleIndex, bHit);
-	ServerMuzzleIndex ^= 1;
+	MulticastPlayShot(Start, Direction, MuzzleIndex, Impact);
+	ServerMuzzleIndex = MuzzleIndex ^ 1;
+}
+
+double URifleGunComponent::GetEstimatedServerTime() const
+{
+	if (!GetWorld())
+	{
+		return 0.0;
+	}
+	if (const AGameStateBase* GameState = GetWorld()->GetGameState())
+	{
+		return UHitRewindComponent::EstimateClientViewServerTime(
+			GetOwner(), GameState->GetServerWorldTimeSeconds());
+	}
+	return UHitRewindComponent::EstimateClientViewServerTime(
+		GetOwner(), GetWorld()->GetTimeSeconds());
 }
 
 bool URifleGunComponent::BuildShot(const uint8 MuzzleIndex, const bool bApplyDamage,
-	FVector& OutStart, FVector& OutEnd, FVector& OutDirection, bool& bOutHit) const
+	FVector& OutStart, FVector& OutEnd, FVector& OutDirection,
+	bool& bOutHit, FHitResult& OutHit) const
 {
 	const USceneComponent* Muzzle = GetMuzzle(MuzzleIndex);
 	const UJetStatsComponent* StatsComponent = GetOwner()->FindComponentByClass<UJetStatsComponent>();
@@ -215,7 +336,8 @@ bool URifleGunComponent::BuildShot(const uint8 MuzzleIndex, const bool bApplyDam
 	const FRifleGunStats& Stats = StatsComponent->GetRifleGunStats();
 	OutStart = Muzzle->GetComponentLocation();
 	const bool bUseCameraAim = bApplyDamage ? bServerCameraAimEnabled : bLocalCameraAimEnabled;
-	FHitResult Hit;
+	FHitResult& Hit = OutHit;
+	Hit = FHitResult();
 	if (bUseCameraAim)
 	{
 		const FVector CameraOrigin = bApplyDamage ? ServerCameraOrigin : LocalCameraOrigin;
@@ -295,9 +417,10 @@ FVector URifleGunComponent::FindCameraAimPoint(const FVector& CameraOrigin,
 	return CameraEnd;
 }
 
-void URifleGunComponent::MulticastPlayShot_Implementation(const FVector_NetQuantize Start,
-	const FVector_NetQuantize End, const FVector_NetQuantizeNormal Direction,
-	const uint8 MuzzleIndex, const bool bHit)
+void URifleGunComponent::MulticastPlayShot_Implementation(
+	const FVector_NetQuantize Start,
+	const FVector_NetQuantizeNormal Direction, const uint8 MuzzleIndex,
+	const FCombatImpactEvent& Impact)
 {
 	if (GetNetMode() == NM_DedicatedServer)
 	{
@@ -306,15 +429,17 @@ void URifleGunComponent::MulticastPlayShot_Implementation(const FVector_NetQuant
 	const APawn* Pawn = Cast<APawn>(GetOwner());
 	if (Pawn && Pawn->IsLocallyControlled())
 	{
-		// The owner already played its muzzle flash and tracer immediately. It still
-		// needs the authoritative impact, whose position may differ on a moving target.
-		if (bHit)
+		const FCombatImpactEvent* Predicted = PredictedImpacts.Find(Impact.Sequence);
+		const bool bAlreadyPresented = Predicted
+			&& Predicted->MatchesPredictedContact(Impact);
+		if (Impact.bBlockingHit && !bAlreadyPresented)
 		{
-			PlayImpactVisual(End, Direction);
+			PlayImpactVisual(Impact);
 		}
+		PredictedImpacts.Remove(Impact.Sequence);
 		return;
 	}
-	PlayShotVisual(Start, End, Direction, MuzzleIndex, bHit);
+	PlayShotVisual(Start, Direction, MuzzleIndex, Impact);
 }
 
 void URifleGunComponent::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
@@ -324,14 +449,18 @@ void URifleGunComponent::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& O
 	DOREPLIFETIME_CONDITION(URifleGunComponent, ServerHits, COND_OwnerOnly);
 }
 
-void URifleGunComponent::PlayShotVisual(const FVector& Start, const FVector& End,
-	const FVector& Direction, const uint8 MuzzleIndex, const bool bHit) const
+void URifleGunComponent::PlayShotVisual(const FVector& Start,
+	const FVector& Direction, const uint8 MuzzleIndex,
+	const FCombatImpactEvent& Impact) const
 {
 	const UJetStatsComponent* Stats = GetOwner()->FindComponentByClass<UJetStatsComponent>();
 	if (!Stats)
 	{
 		return;
 	}
+	FVector End;
+	FVector ImpactNormal;
+	Impact.Resolve(End, ImpactNormal);
 	if (TracerVisualClass)
 	{
 		FActorSpawnParameters Params;
@@ -366,23 +495,27 @@ void URifleGunComponent::PlayShotVisual(const FVector& Start, const FVector& End
 	{
 		UGameplayStatics::SpawnSoundAtLocation(this, RifleFireSound, Start);
 	}
-	if (bHit)
+	if (Impact.bBlockingHit)
 	{
-		PlayImpactVisual(End, Direction);
+		PlayImpactVisual(Impact);
 	}
 	if (bDrawShotDebug)
 	{
-		DrawDebugLine(GetWorld(), Start, End, bHit ? FColor::Red : FColor::Green, false, 0.25f, 0, 1.0f);
+		DrawDebugLine(GetWorld(), Start, End,
+			Impact.bBlockingHit ? FColor::Red : FColor::Green,
+			false, 0.25f, 0, 1.0f);
 	}
 }
 
-void URifleGunComponent::PlayImpactVisual(const FVector& ImpactPoint,
-	const FVector& ShotDirection) const
+void URifleGunComponent::PlayImpactVisual(const FCombatImpactEvent& Impact) const
 {
+	FVector ImpactPoint;
+	FVector ImpactNormal;
+	Impact.Resolve(ImpactPoint, ImpactNormal);
 	if (ImpactEffect)
 	{
 		UNiagaraFunctionLibrary::SpawnSystemAtLocation(
-			GetWorld(), ImpactEffect, ImpactPoint, (-ShotDirection).Rotation());
+			GetWorld(), ImpactEffect, ImpactPoint, ImpactNormal.Rotation());
 	}
 	if (RifleImpactSound && GetNetMode() != NM_DedicatedServer)
 	{

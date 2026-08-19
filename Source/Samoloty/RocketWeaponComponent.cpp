@@ -144,6 +144,21 @@ void URocketWeaponComponent::OnWeaponEquippedChanged()
 	}
 }
 
+void URocketWeaponComponent::StartEquipCooldown()
+{
+	const UJetStatsComponent* StatsComponent = GetOwner()
+		? GetOwner()->FindComponentByClass<UJetStatsComponent>() : nullptr;
+	if (!GetWorld() || !StatsComponent)
+	{
+		return;
+	}
+	const double ReadyTime = GetServerTimeSeconds()
+		+ FMath::Max(0.0f, StatsComponent->GetRocketBarrageStats().Cooldown);
+	WeaponState = ERocketWeaponState::Cooldown;
+	SalvosFired = 0;
+	NextActionServerTime = FMath::Max(NextActionServerTime, ReadyTime);
+}
+
 void URocketWeaponComponent::StartBarrage()
 {
 	if (!GetOwner()->HasAuthority() || WeaponState != ERocketWeaponState::Ready

@@ -24,7 +24,7 @@ void UJetEngineAudioComponent::BeginPlay()
 	SlowAudioComponent = CreateLoopComponent(SlowEngineLoop, TEXT("SlowEngineAudio"));
 	NormalAudioComponent = CreateLoopComponent(NormalEngineLoop, TEXT("NormalEngineAudio"));
 	BoostAudioComponent = CreateLoopComponent(BoostEngineLoop, TEXT("BoostEngineAudio"));
-	NormalVolume = NormalAudioComponent ? MasterVolume : 0.0f;
+	NormalVolume = NormalAudioComponent ? MasterVolume * NormalLoopVolumeScale : 0.0f;
 	if (NormalAudioComponent)
 	{
 		NormalAudioComponent->SetVolumeMultiplier(NormalVolume);
@@ -48,8 +48,10 @@ void UJetEngineAudioComponent::TickComponent(const float DeltaTime, const ELevel
 	const float SlowWeight = BrakeWeight * (1.0f - BoostWeight) * EnginePower;
 	const float NormalWeight = (1.0f - BrakeWeight) * (1.0f - BoostWeight) * EnginePower;
 
-	SlowVolume = FMath::FInterpTo(SlowVolume, SlowWeight * MasterVolume, DeltaTime, CrossfadeSpeed);
-	NormalVolume = FMath::FInterpTo(NormalVolume, NormalWeight * MasterVolume, DeltaTime, CrossfadeSpeed);
+	SlowVolume = FMath::FInterpTo(SlowVolume,
+		SlowWeight * MasterVolume * SlowLoopVolumeScale, DeltaTime, CrossfadeSpeed);
+	NormalVolume = FMath::FInterpTo(NormalVolume,
+		NormalWeight * MasterVolume * NormalLoopVolumeScale, DeltaTime, CrossfadeSpeed);
 	BoostVolume = FMath::FInterpTo(BoostVolume, BoostWeight * MasterVolume, DeltaTime, CrossfadeSpeed);
 	if (SlowAudioComponent)
 	{

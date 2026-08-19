@@ -4,6 +4,7 @@
 #include "HealthComponent.h"
 #include "JetStatsComponent.h"
 #include "RifleGunComponent.h"
+#include "TargetIntentComponent.h"
 #include "DrawDebugHelpers.h"
 #include "EngineUtils.h"
 #include "GameFramework/Controller.h"
@@ -221,6 +222,11 @@ void UEnemyPlaneAIComponent::SetCurrentTarget(APawn* NewTarget)
 	}
 
 	CurrentTarget = NewTarget;
+	if (UTargetIntentComponent* TargetIntent = GetOwner()
+		? GetOwner()->FindComponentByClass<UTargetIntentComponent>() : nullptr)
+	{
+		TargetIntent->SetCurrentTarget(NewTarget);
+	}
 	TimeWithoutAttackOpportunity = 0.0f;
 	TargetReevaluationTimeRemaining = FMath::Max(1.0f, TargetReevaluationInterval);
 	SetState(EEnemyPlaneState::AttackRun);
@@ -233,6 +239,11 @@ void UEnemyPlaneAIComponent::ClearCurrentTarget()
 		return;
 	}
 	CurrentTarget.Reset();
+	if (UTargetIntentComponent* TargetIntent = GetOwner()
+		? GetOwner()->FindComponentByClass<UTargetIntentComponent>() : nullptr)
+	{
+		TargetIntent->SetCurrentTarget(nullptr);
+	}
 	TimeWithoutAttackOpportunity = 0.0f;
 	SetState(EEnemyPlaneState::Roaming);
 }

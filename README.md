@@ -92,13 +92,21 @@ W przyszłości będzie agregował modyfikatory z przedmiotów, perków i drzewa
 
 ### `UArcadeFlightComponent`
 
-Serwer wykonuje obrót, ruch, strafe, zmianę prędkości oraz kolizję. Klient przesyła znormalizowane wejście. Pozostali gracze są wyświetlani przez buforowane snapshoty, interpolację i krótką ograniczoną ekstrapolację.
+Lot działa jako stałokrokowa symulacja 60 Hz oparta na `NetworkPrediction`.
+Klient właściciela natychmiast przewiduje znormalizowane wejście, serwer
+potwierdza wynik, a rozbieżności są naprawiane przez rewind i ponowne wykonanie
+niepotwierdzonych komend. Pozycja, prędkość, wygładzone wejście, strafe, bank
+oraz stan boosta, hovera, granic mapy i ruchów specjalnych znajdują się we
+wspólnej historii symulacji. Roll, zawrót, ruch wsteczny, forward dash i blink
+są przewidywane lokalnie oraz zatwierdzane przez serwer bez osobnego input laga.
 
 System nie dodaje fizycznej siły grawitacji, opadania ani przeciągnięcia. Kierunek samolotu wpływa wyłącznie na docelową prędkość i `ForwardSpeedResponse`.
 
 ### `UJetBoostComponent`
 
-Serwer kontroluje energię oraz stan boosta. Replikowany stan jest wygładzany do `BoostAlpha`, używanego przez lot, kamerę, VFX i audio.
+Energia, regeneracja i `BoostAlpha` są częścią przewidywanego stanu lotu.
+`UJetBoostComponent` pozostaje fasadą wejścia oraz prezentacji dla kamery, VFX,
+audio i Blueprintów.
 
 ### `UJetEngineAudioComponent`
 
@@ -137,6 +145,8 @@ Dokładne założenia znajdują się w:
 - [`Docs/EnemyPlaneAI.md`](Docs/EnemyPlaneAI.md)
 - [`Docs/WeaponSystem.md`](Docs/WeaponSystem.md)
 - [`Docs/ShotgunDesign.md`](Docs/ShotgunDesign.md)
+- [`Docs/NetworkMovementArchitecture.md`](Docs/NetworkMovementArchitecture.md)
+- [`Docs/NetworkImpactArchitecture.md`](Docs/NetworkImpactArchitecture.md)
 
 ## Konfiguracja `BP_PlayerPlane`
 
@@ -164,7 +174,8 @@ Główny box jest obecnie zarówno kolizją ruchu, jak i uproszczonym celem bron
 ## Multiplayer
 
 - serwer jest autorytatywny dla ruchu, boosta, rakiet, hitscanu, obrażeń i HP,
-- klient nie zmienia autorytatywnej pozycji ani energii,
+- klient przewiduje własny lot i energię boosta, ale serwer potwierdza stan i
+  uruchamia rewind/resimulation przy rozbieżności,
 - efekty wizualne i audio są lokalne; serwer rozsyła dane potrzebne do ich odtworzenia,
 - proste rakiety odtwarzają ruch lokalnie z replikowanych danych startowych,
 - wystrzelone rakiety pozostają aktywne po śmierci właściciela,

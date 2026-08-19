@@ -3,13 +3,25 @@
 #include "Blueprint/WidgetTree.h"
 #include "Components/CanvasPanel.h"
 #include "Components/CanvasPanelSlot.h"
+#include "Components/Border.h"
+#include "Components/BorderSlot.h"
+#include "Components/HorizontalBox.h"
+#include "Components/HorizontalBoxSlot.h"
 #include "Components/Image.h"
 #include "Components/Overlay.h"
 #include "Components/OverlaySlot.h"
 #include "Components/ProgressBar.h"
+#include "Components/SizeBox.h"
 #include "Components/TextBlock.h"
 #include "Engine/Texture2D.h"
 #include "UObject/ConstructorHelpers.h"
+
+namespace
+{
+	// The lock artwork contains long outer ticks and a large empty center, so the
+	// same canvas size makes its useful reticle look much smaller than the selected marker.
+	constexpr float LockMarkerArtworkScale = 1.55f;
+}
 
 UFlightHUDWidget::UFlightHUDWidget(const FObjectInitializer& ObjectInitializer)
 	: Super(ObjectInitializer)
@@ -104,14 +116,16 @@ void UFlightHUDWidget::BuildNativeWidgetTree()
 
 	LockMarkerImage = WidgetTree->ConstructWidget<UImage>(UImage::StaticClass(), TEXT("LockMarkerImage"));
 	LockMarkerImage->SetBrushFromTexture(LockMarkerTexture, false);
-	LockMarkerImage->SetColorAndOpacity(FLinearColor::White);
+	LockMarkerImage->SetColorAndOpacity(FLinearColor(1.0f, 0.04f, 0.02f, 1.0f));
 	LockMarkerImage->SetVisibility(ESlateVisibility::Collapsed);
 	LockMarkerSlot = RootCanvas->AddChildToCanvas(LockMarkerImage);
 	if (LockMarkerSlot)
 	{
 		LockMarkerSlot->SetAnchors(FAnchors(0.0f, 0.0f));
 		LockMarkerSlot->SetAlignment(FVector2D(0.5f, 0.5f));
-		LockMarkerSlot->SetSize(LockMarkerSize);
+		// Compensate for transparent padding/spacing inside the lock artwork so its
+		// visible reticle matches the selected-target marker's apparent size.
+		LockMarkerSlot->SetSize(WorldTargetMarkerSize * LockMarkerArtworkScale);
 		LockMarkerSlot->SetAutoSize(false);
 		LockMarkerSlot->SetZOrder(5);
 	}
@@ -126,7 +140,7 @@ void UFlightHUDWidget::BuildNativeWidgetTree()
 	{
 		SelectedTargetMarkerSlot->SetAnchors(FAnchors(0.0f, 0.0f));
 		SelectedTargetMarkerSlot->SetAlignment(FVector2D(0.5f, 0.5f));
-		SelectedTargetMarkerSlot->SetSize(SelectedTargetMarkerSize);
+		SelectedTargetMarkerSlot->SetSize(WorldTargetMarkerSize);
 		SelectedTargetMarkerSlot->SetAutoSize(false);
 		SelectedTargetMarkerSlot->SetZOrder(6);
 	}
@@ -177,6 +191,106 @@ void UFlightHUDWidget::BuildStatusWidgetTree()
 	{
 		return;
 	}
+
+	PerformanceStatsText = WidgetTree->ConstructWidget<UTextBlock>(
+		UTextBlock::StaticClass(), TEXT("PerformanceStatsText"));
+	FSlateFontInfo PerformanceFont = PerformanceStatsText->GetFont();
+	PerformanceFont.Size = 18;
+	PerformanceStatsText->SetFont(PerformanceFont);
+	PerformanceStatsText->SetColorAndOpacity(
+		FSlateColor(FLinearColor(0.35f, 1.0f, 0.4f, 1.0f)));
+	PerformanceStatsText->SetShadowOffset(FVector2D(1.5f, 1.5f));
+	PerformanceStatsText->SetShadowColorAndOpacity(
+		FLinearColor(0.0f, 0.0f, 0.0f, 0.9f));
+	PerformanceStatsText->SetVisibility(ESlateVisibility::Collapsed);
+	if (UCanvasPanelSlot* PerformanceSlot =
+		RootCanvas->AddChildToCanvas(PerformanceStatsText))
+	{
+		PerformanceSlot->SetAnchors(FAnchors(0.0f, 0.0f));
+		PerformanceSlot->SetAlignment(FVector2D(0.0f, 0.0f));
+		PerformanceSlot->SetPosition(FVector2D(24.0f, 24.0f));
+		PerformanceSlot->SetAutoSize(true);
+		PerformanceSlot->SetZOrder(30);
+	}
+
+	SpeedText = WidgetTree->ConstructWidget<UTextBlock>(
+		UTextBlock::StaticClass(), TEXT("SpeedText"));
+	FSlateFontInfo SpeedFont = SpeedText->GetFont();
+	SpeedFont.Size = 20;
+	SpeedText->SetFont(SpeedFont);
+	SpeedText->SetColorAndOpacity(
+		FSlateColor(FLinearColor(0.25f, 0.85f, 1.0f, 1.0f)));
+	SpeedText->SetShadowOffset(FVector2D(1.5f, 1.5f));
+	SpeedText->SetShadowColorAndOpacity(FLinearColor::Black);
+	SpeedText->SetText(FText::FromString(TEXT("SPEED  0 m/s")));
+	if (UCanvasPanelSlot* SpeedSlot = RootCanvas->AddChildToCanvas(SpeedText))
+	{
+		SpeedSlot->SetAnchors(FAnchors(0.0f, 1.0f));
+		SpeedSlot->SetAlignment(FVector2D(0.0f, 1.0f));
+		SpeedSlot->SetPosition(FVector2D(32.0f, -152.0f));
+		SpeedSlot->SetAutoSize(true);
+		SpeedSlot->SetZOrder(20);
+	}
+
+	AbilityCooldownContainer = WidgetTree->ConstructWidget<UHorizontalBox>(
+		UHorizontalBox::StaticClass(), TEXT("AbilityCooldownContainer"));
+	if (UCanvasPanelSlot* AbilityContainerSlot =
+		RootCanvas->AddChildToCanvas(AbilityCooldownContainer))
+	{
+		AbilityContainerSlot->SetAnchors(FAnchors(0.5f, 1.0f));
+		AbilityContainerSlot->SetAlignment(FVector2D(0.5f, 1.0f));
+		AbilityContainerSlot->SetPosition(FVector2D(0.0f, -28.0f));
+		AbilityContainerSlot->SetAutoSize(true);
+		AbilityContainerSlot->SetZOrder(25);
+	}
+
+	const TCHAR* AbilityWidgetNames[] = {
+		TEXT("QuickReversal"), TEXT("BackwardDash"), TEXT("ForwardDash"),
+		TEXT("Blink"), TEXT("EvasiveRoll")
+	};
+	for (const TCHAR* AbilityWidgetName : AbilityWidgetNames)
+	{
+		USizeBox* AbilitySize = WidgetTree->ConstructWidget<USizeBox>(
+			USizeBox::StaticClass(),
+			FName(*(FString(AbilityWidgetName) + TEXT("Size"))));
+		AbilitySize->SetWidthOverride(165.0f);
+		AbilitySize->SetHeightOverride(40.0f);
+		if (UHorizontalBoxSlot* AbilityHorizontalSlot =
+			AbilityCooldownContainer->AddChildToHorizontalBox(AbilitySize))
+		{
+			AbilityHorizontalSlot->SetPadding(FMargin(3.0f, 0.0f));
+		}
+
+		UBorder* AbilityBorder = WidgetTree->ConstructWidget<UBorder>(
+			UBorder::StaticClass(),
+			FName(*(FString(AbilityWidgetName) + TEXT("Border"))));
+		AbilityBorder->SetPadding(FMargin(6.0f, 4.0f));
+		AbilityBorder->SetBrushColor(FLinearColor(0.015f, 0.025f, 0.04f, 0.52f));
+		AbilitySize->AddChild(AbilityBorder);
+
+		UTextBlock* AbilityText = WidgetTree->ConstructWidget<UTextBlock>(
+			UTextBlock::StaticClass(),
+			FName(*(FString(AbilityWidgetName) + TEXT("Text"))));
+		FSlateFontInfo AbilityFont = AbilityText->GetFont();
+		AbilityFont.Size = 12;
+		AbilityText->SetFont(AbilityFont);
+		AbilityText->SetJustification(ETextJustify::Center);
+		AbilityText->SetAutoWrapText(false);
+		AbilityText->SetClipping(EWidgetClipping::ClipToBounds);
+		AbilityText->SetColorAndOpacity(
+			FSlateColor(FLinearColor(0.62f, 0.68f, 0.74f, 0.85f)));
+		AbilityText->SetShadowOffset(FVector2D(1.0f, 1.0f));
+		AbilityText->SetShadowColorAndOpacity(FLinearColor::Black);
+		if (UBorderSlot* AbilityTextSlot =
+			Cast<UBorderSlot>(AbilityBorder->AddChild(AbilityText)))
+		{
+			AbilityTextSlot->SetHorizontalAlignment(HAlign_Fill);
+			AbilityTextSlot->SetVerticalAlignment(VAlign_Center);
+		}
+		AbilityCooldownBorders.Add(AbilityBorder);
+		AbilityCooldownTexts.Add(AbilityText);
+	}
+	SetAbilityCooldowns(0.0f, 0.0f, 0.0f, 0.0f, 0.0f);
 	struct FBarSpec
 	{
 		const TCHAR* BarName;
@@ -256,6 +370,70 @@ void UFlightHUDWidget::BuildStatusWidgetTree()
 	}
 }
 
+void UFlightHUDWidget::SetPerformanceStats(const bool bShowFPS, const float FPS,
+	const bool bShowPing, const float PingMilliseconds)
+{
+	if (!PerformanceStatsText)
+	{
+		return;
+	}
+	if (!bShowFPS && !bShowPing)
+	{
+		PerformanceStatsText->SetVisibility(ESlateVisibility::Collapsed);
+		return;
+	}
+
+	TArray<FString> Lines;
+	if (bShowFPS)
+	{
+		Lines.Add(FString::Printf(TEXT("FPS: %d"),
+			FMath::Max(0, FMath::RoundToInt(FPS))));
+	}
+	if (bShowPing)
+	{
+		Lines.Add(FString::Printf(TEXT("PING: %d ms"),
+			FMath::Max(0, FMath::RoundToInt(PingMilliseconds))));
+	}
+	PerformanceStatsText->SetText(FText::FromString(FString::Join(Lines, TEXT("\n"))));
+	PerformanceStatsText->SetVisibility(ESlateVisibility::HitTestInvisible);
+}
+
+void UFlightHUDWidget::SetAbilityCooldowns(const float QuickReversalRemaining,
+	const float BackwardDashRemaining, const float ForwardDashRemaining,
+	const float BlinkRemaining, const float EvasiveRollRemaining)
+{
+	static const TCHAR* Labels[] = {
+		TEXT("Q  TURN"), TEXT("E  REVERSE"), TEXT("C  DASH"),
+		TEXT("F  BLINK"), TEXT("A/D  ROLL")
+	};
+	const float RemainingTimes[] = {
+		QuickReversalRemaining, BackwardDashRemaining, ForwardDashRemaining,
+		BlinkRemaining, EvasiveRollRemaining
+	};
+	for (int32 Index = 0; Index < UE_ARRAY_COUNT(Labels); ++Index)
+	{
+		UBorder* Border = AbilityCooldownBorders.IsValidIndex(Index)
+			? AbilityCooldownBorders[Index].Get() : nullptr;
+		UTextBlock* Text = AbilityCooldownTexts.IsValidIndex(Index)
+			? AbilityCooldownTexts[Index].Get() : nullptr;
+		if (!Border || !Text)
+		{
+			continue;
+		}
+		const float Remaining = FMath::Max(0.0f, RemainingTimes[Index]);
+		const bool bOnCooldown = Remaining > 0.05f;
+		Text->SetText(FText::FromString(bOnCooldown
+			? FString::Printf(TEXT("%s  %.1fs"), Labels[Index], Remaining)
+			: FString::Printf(TEXT("%s  READY"), Labels[Index])));
+		Text->SetColorAndOpacity(FSlateColor(bOnCooldown
+			? FLinearColor(1.0f, 0.92f, 0.72f, 1.0f)
+			: FLinearColor(0.62f, 0.68f, 0.74f, 0.85f)));
+		Border->SetBrushColor(bOnCooldown
+			? FLinearColor(0.62f, 0.18f, 0.02f, 0.76f)
+			: FLinearColor(0.015f, 0.025f, 0.04f, 0.52f));
+	}
+}
+
 void UFlightHUDWidget::SetBoundaryWarning(const float WarningAlpha,
 	const bool bAutomaticReturn)
 {
@@ -301,8 +479,15 @@ void UFlightHUDWidget::SetPlayerStatus(const float CurrentHealth,
 	const float MaxHealth, const float CurrentBoost, const float MaxBoost,
 	const FName GunName, const float GunCooldownRemaining,
 	const float GunCooldownDuration, const FName MissileName,
-	const float MissileCooldownRemaining, const float MissileCooldownDuration)
+	const float MissileCooldownRemaining, const float MissileCooldownDuration,
+	const float SpeedCentimetersPerSecond)
 {
+	if (SpeedText)
+	{
+		SpeedText->SetText(FText::FromString(FString::Printf(
+			TEXT("SPEED  %.0f m/s"),
+			FMath::Max(0.0f, SpeedCentimetersPerSecond) / 100.0f)));
+	}
 	if (HealthBar && HealthText)
 	{
 		HealthBar->SetPercent(MaxHealth > UE_SMALL_NUMBER
@@ -555,6 +740,11 @@ void UFlightHUDWidget::SetRadarContacts(const bool bVisible,
 void UFlightHUDWidget::SetCombatElementsVisible(const bool bVisible)
 {
 	bCombatElementsVisible = bVisible;
+	if (AbilityCooldownContainer)
+	{
+		AbilityCooldownContainer->SetVisibility(bVisible
+			? ESlateVisibility::HitTestInvisible : ESlateVisibility::Collapsed);
+	}
 	if (CrosshairImage)
 	{
 		CrosshairImage->SetVisibility(

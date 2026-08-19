@@ -29,6 +29,8 @@ public:
 	virtual void SetFirePoints(USceneComponent* LeftPoint, USceneComponent* RightPoint);
 	virtual void RejectCurrentTarget();
 	virtual void SetWeaponEquipped(bool bEquipped);
+	/** Starts this weapon's normal cooldown when it becomes active after a swap. */
+	virtual void StartEquipCooldown();
 
 	UFUNCTION(BlueprintPure, Category="Plane|Weapons")
 	EWeaponSlot GetWeaponSlot() const { return WeaponSlot; }

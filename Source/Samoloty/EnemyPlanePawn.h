@@ -9,10 +9,12 @@ class UAircraftCollisionComponent;
 class UCapsuleComponent;
 class UEnemyPlaneAIComponent;
 class UHealthComponent;
+class UHitRewindComponent;
 class UJetStatsComponent;
 class URifleGunComponent;
 class USceneComponent;
 class UStaticMeshComponent;
+class UTargetIntentComponent;
 class UWorldNameComponent;
 
 UCLASS()
@@ -49,6 +51,9 @@ protected:
 	TObjectPtr<UAircraftCollisionComponent> AircraftCollision;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Enemy Plane|Components")
+	TObjectPtr<UHitRewindComponent> HitRewind;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Enemy Plane|Components")
 	TObjectPtr<UStaticMeshComponent> PlaneMesh;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Enemy Plane|Components")
@@ -62,6 +67,9 @@ protected:
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Enemy Plane|Components")
 	TObjectPtr<UEnemyPlaneAIComponent> EnemyAI;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Enemy Plane|Components")
+	TObjectPtr<UTargetIntentComponent> TargetIntent;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Enemy Plane|Components")
 	TObjectPtr<UWorldNameComponent> WorldName;

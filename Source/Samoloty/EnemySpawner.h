@@ -52,6 +52,21 @@ protected:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Enemy Spawner", meta=(Units="cm"))
 	float SpawnHeightOffset = 0.0f;
 
+	/** Minimum horizontal distance between enemies managed by this spawner. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Enemy Spawner",
+		meta=(ClampMin="0.0", UIMin="0.0", Units="cm"))
+	float MinimumSpawnSeparation = 800.0f;
+
+	/** Random positions tested before postponing this spawn until the next retry. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Enemy Spawner",
+		meta=(ClampMin="1", ClampMax="100", UIMin="1", UIMax="100"))
+	int32 MaxSpawnAttempts = 20;
+
+	/** Small clearance above projected ground, added on top of capsule half-height. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Enemy Spawner|Navigation",
+		meta=(EditCondition="bProjectToNavigation", ClampMin="0", Units="cm"))
+	float GroundSpawnClearance = 5.0f;
+
 	/** Enable for walking enemies so their spawn position is placed on NavMesh. */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Enemy Spawner|Navigation")
 	bool bProjectToNavigation = false;

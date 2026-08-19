@@ -48,9 +48,15 @@ public:
 	float TargetScanInterval = 0.1f;
 
 private:
+	UFUNCTION(Server, Reliable)
+	void ServerSetLockedTarget(AActor* NewTarget);
+
 	void ScanTargets();
 	void SetCurrentTarget(AActor* NewTarget);
+	void SetAuthoritativeTargetIntent(AActor* NewTarget);
 	bool IsEligibleTarget(const AActor* Candidate, const FHomingMissileStats& Stats) const;
+	bool IsEligibleAuthoritativeTarget(const AActor* Candidate,
+		const FHomingMissileStats& Stats) const;
 	const FHomingMissileStats* GetStats() const;
 	void DrawTargetingDebug() const;
 

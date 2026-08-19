@@ -1,7 +1,11 @@
 #include "ArcadeFlightHUD.h"
 
 #include "ArcadeFlightComponent.h"
+#include "BackwardDashComponent.h"
+#include "BlinkComponent.h"
+#include "EvasiveRollComponent.h"
 #include "FlightHUDWidget.h"
+#include "ForwardDashComponent.h"
 #include "GroundBarrageWeaponComponent.h"
 #include "HealthComponent.h"
 #include "JetBoostComponent.h"
@@ -10,7 +14,10 @@
 #include "PlaneTargetingUtils.h"
 #include "PlaneWeaponComponent.h"
 #include "RadarComponent.h"
+#include "QuickReversalComponent.h"
+#include "SamolotyGameUserSettings.h"
 #include "TargetSelectionComponent.h"
+#include "TargetIntentComponent.h"
 #include "WeaponSystemComponent.h"
 #include "WorldNameComponent.h"
 #include "Blueprint/WidgetLayoutLibrary.h"
@@ -18,9 +25,12 @@
 #include "Engine/Canvas.h"
 #include "CanvasItem.h"
 #include "Engine/Engine.h"
+#include "Engine/Texture2D.h"
 #include "EngineUtils.h"
 #include "GameFramework/PlayerController.h"
 #include "GameFramework/PlayerState.h"
+#include "GameFramework/GameUserSettings.h"
+#include "UObject/ConstructorHelpers.h"
 
 namespace
 {
@@ -80,6 +90,9 @@ namespace
 AArcadeFlightHUD::AArcadeFlightHUD()
 {
 	FlightHUDWidgetClass = UFlightHUDWidget::StaticClass();
+	static ConstructorHelpers::FObjectFinder<UTexture2D> AttackerOnScreenFinder(
+		TEXT("/Game/Main/Images/HUD/IMG_AttackerOnScreen.IMG_AttackerOnScreen"));
+	AttackerOnScreenTexture = AttackerOnScreenFinder.Object;
 }
 
 void AArcadeFlightHUD::BeginPlay()
@@ -107,7 +120,7 @@ void AArcadeFlightHUD::DrawHUD()
 	UpdateHealthBinding(OwnerPawn);
 	const UArcadeFlightComponent* Flight =
 		OwnerPawn ? OwnerPawn->FindComponentByClass<UArcadeFlightComponent>() : nullptr;
-	const bool bCombatElementsVisible = !Flight || Flight->IsCombatFlightEnabled();
+	const bool bCombatElementsVisible = !Flight || Flight->AreCombatElementsVisible();
 	FlightHUDWidget->SetCombatElementsVisible(bCombatElementsVisible);
 	FlightHUDWidget->SetBoundaryWarning(
 		Flight ? Flight->GetBoundaryWarningAlpha() : 0.0f,
@@ -120,6 +133,46 @@ void AArcadeFlightHUD::DrawHUD()
 		? OwnerPawn->FindComponentByClass<UJetStatsComponent>() : nullptr;
 	const UWeaponSystemComponent* PlayerWeapons = OwnerPawn
 		? OwnerPawn->FindComponentByClass<UWeaponSystemComponent>() : nullptr;
+
+	const float FrameDeltaSeconds = GetWorld() ? GetWorld()->GetDeltaSeconds() : 0.0f;
+	if (FrameDeltaSeconds > KINDA_SMALL_NUMBER)
+	{
+		const float InstantFPS = 1.0f / FrameDeltaSeconds;
+		SmoothedFPS = SmoothedFPS <= 0.0f ? InstantFPS
+			: FMath::FInterpTo(SmoothedFPS, InstantFPS, FrameDeltaSeconds, 3.0f);
+	}
+	const double PerformanceNow = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0;
+	if (PerformanceNow >= NextPerformanceStatsUpdateTime)
+	{
+		NextPerformanceStatsUpdateTime = PerformanceNow + 0.25;
+		const USamolotyGameUserSettings* ProjectSettings = GEngine
+			? Cast<USamolotyGameUserSettings>(GEngine->GetGameUserSettings()) : nullptr;
+		const APlayerState* LocalPlayerState = PlayerOwner->PlayerState;
+		FlightHUDWidget->SetPerformanceStats(
+			ProjectSettings && ProjectSettings->ShouldShowFPS(), SmoothedFPS,
+			ProjectSettings && ProjectSettings->ShouldShowPing(),
+			LocalPlayerState ? LocalPlayerState->GetPingInMilliseconds() : 0.0f);
+	}
+	if (PerformanceNow >= NextAbilityCooldownUpdateTime)
+	{
+		NextAbilityCooldownUpdateTime = PerformanceNow + 0.1;
+		const UQuickReversalComponent* QuickReversal = OwnerPawn
+			? OwnerPawn->FindComponentByClass<UQuickReversalComponent>() : nullptr;
+		const UBackwardDashComponent* BackwardDash = OwnerPawn
+			? OwnerPawn->FindComponentByClass<UBackwardDashComponent>() : nullptr;
+		const UForwardDashComponent* ForwardDash = OwnerPawn
+			? OwnerPawn->FindComponentByClass<UForwardDashComponent>() : nullptr;
+		const UBlinkComponent* Blink = OwnerPawn
+			? OwnerPawn->FindComponentByClass<UBlinkComponent>() : nullptr;
+		const UEvasiveRollComponent* EvasiveRoll = OwnerPawn
+			? OwnerPawn->FindComponentByClass<UEvasiveRollComponent>() : nullptr;
+		FlightHUDWidget->SetAbilityCooldowns(
+			QuickReversal ? QuickReversal->GetCooldownRemaining() : 0.0f,
+			BackwardDash ? BackwardDash->GetCooldownRemaining() : 0.0f,
+			ForwardDash ? ForwardDash->GetCooldownRemaining() : 0.0f,
+			Blink ? Blink->GetCooldownRemaining() : 0.0f,
+			EvasiveRoll ? EvasiveRoll->GetCooldownRemaining() : 0.0f);
+	}
 	UPlaneWeaponComponent* ActiveGun = PlayerWeapons
 		? PlayerWeapons->GetActiveWeapon(EWeaponSlot::Gun) : nullptr;
 	UPlaneWeaponComponent* ActiveMissile = PlayerWeapons
@@ -144,7 +197,9 @@ void AArcadeFlightHUD::DrawHUD()
 		ActiveGun ? ActiveGun->GetWeaponDisplayName() : FName(TEXT("Gun")),
 		GunRemaining, GunDuration,
 		ActiveMissile ? ActiveMissile->GetWeaponDisplayName() : FName(TEXT("Missile")),
-		MissileRemaining, MissileDuration);
+		MissileRemaining, MissileDuration,
+		Flight ? Flight->GetCurrentVelocity().Size()
+			: OwnerPawn ? OwnerPawn->GetVelocity().Size() : 0.0f);
 	DrawGroundBarrageMarker(OwnerPawn, bCombatElementsVisible);
 	DrawWorldNameplates(OwnerPawn);
 
@@ -244,12 +299,13 @@ void AArcadeFlightHUD::DrawHUD()
 
 	TArray<FVector2D> AttackerDirections;
 	const double Now = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0;
-	for (auto It = RecentAttackersUntil.CreateIterator(); It; ++It)
+	for (const TWeakObjectPtr<APawn>& ThreatPawnPtr : CachedNameplateActors)
 	{
-		AActor* Attacker = It.Key().Get();
-		if (!IsValid(Attacker) || It.Value() <= Now)
+		APawn* Attacker = ThreatPawnPtr.Get();
+		const UTargetIntentComponent* TargetIntent = IsValid(Attacker)
+			? Attacker->FindComponentByClass<UTargetIntentComponent>() : nullptr;
+		if (!TargetIntent || !TargetIntent->IsTargeting(OwnerPawn))
 		{
-			It.RemoveCurrent();
 			continue;
 		}
 		if (Radar && Radar->IsDetected(Attacker))
@@ -417,6 +473,42 @@ void AArcadeFlightHUD::DrawWorldNameplates(APawn* OwnerPawn)
 		const float TextScale = FMath::Lerp(1.05f, 0.72f, DistanceAlpha);
 		TextItem.Scale = FVector2D(TextScale);
 		Canvas->DrawItem(TextItem);
+
+		const UTargetIntentComponent* TargetIntent =
+			Pawn->FindComponentByClass<UTargetIntentComponent>();
+		if (AttackerOnScreenTexture && AttackerOnScreenTexture->GetResource()
+			&& TargetIntent && TargetIntent->IsTargeting(OwnerPawn))
+		{
+			float UnscaledTextWidth = 0.0f;
+			float UnscaledTextHeight = 0.0f;
+			Canvas->StrLen(GEngine->GetSmallFont(), Name,
+				UnscaledTextWidth, UnscaledTextHeight);
+			const float TextHalfWidth = UnscaledTextWidth * TextScale * 0.5f;
+			const float IconSize = AttackerOnScreenSize * TextScale;
+			const float IconHalfSize = IconSize * 0.5f;
+			const float Gap = AttackerOnScreenGap * TextScale;
+			const FVector2D IconDimensions(IconSize, IconSize);
+
+			FCanvasTileItem LeftIcon(
+				FVector2D(ScreenPosition.X - TextHalfWidth - Gap - IconSize,
+					ScreenPosition.Y - IconHalfSize),
+				AttackerOnScreenTexture->GetResource(), IconDimensions,
+				AttackerOnScreenColor);
+			LeftIcon.BlendMode = SE_BLEND_Translucent;
+			LeftIcon.PivotPoint = FVector2D(0.5f, 0.5f);
+			LeftIcon.Rotation = FRotator(0.0f, 90.0f, 0.0f);
+			Canvas->DrawItem(LeftIcon);
+
+			FCanvasTileItem RightIcon(
+				FVector2D(ScreenPosition.X + TextHalfWidth + Gap,
+					ScreenPosition.Y - IconHalfSize),
+				AttackerOnScreenTexture->GetResource(), IconDimensions,
+				AttackerOnScreenColor);
+			RightIcon.BlendMode = SE_BLEND_Translucent;
+			RightIcon.PivotPoint = FVector2D(0.5f, 0.5f);
+			RightIcon.Rotation = FRotator(0.0f, -90.0f, 0.0f);
+			Canvas->DrawItem(RightIcon);
+		}
 	}
 }
 

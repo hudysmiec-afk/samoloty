@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "CombatImpactTypes.h"
 #include "Components/ActorComponent.h"
 #include "AircraftCollisionComponent.generated.h"
 
@@ -30,6 +31,9 @@ public:
 	FVector MoveOwner(const FVector& RequestedMove, const FVector& RequestedVelocity,
 		bool bEnableImpactResponse = true);
 
+	/** Tests the movement capsule at a proposed owner rotation without moving the actor. */
+	bool WouldOverlapAtOwnerRotation(const FRotator& OwnerRotation) const;
+
 	static const FName DamageHitboxTag;
 	static const FName MovementBodyTag;
 
@@ -43,6 +47,11 @@ protected:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Plane|Collision|Movement",
 		meta=(ClampMin="0.05", ClampMax="1"))
 	float SurfaceSpeedRetention = 0.68f;
+
+	/** Converts part of forward speed into impact severity for shallow terrain contacts. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Plane|Collision|Damage",
+		meta=(ClampMin="0", ClampMax="1"))
+	float ShallowImpactSpeedFraction = 0.50f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Plane|Collision|Movement",
 		meta=(ClampMin="0"))
@@ -115,14 +124,19 @@ private:
 		FHitResult& OutHit) const;
 	void HandleImpact(const FHitResult& Hit, float ImpactSpeed,
 		bool bDamageableActorCollision);
+	void PlayImpactEffects(const FCombatImpactEvent& Impact, float Intensity);
 
 	UFUNCTION(NetMulticast, Unreliable)
-	void MulticastPlayImpactEffects(FVector_NetQuantize ImpactPoint,
-		FVector_NetQuantizeNormal ImpactNormal, float Intensity);
+	void MulticastPlayImpactEffects(const FCombatImpactEvent& Impact, float Intensity);
 
 	UPROPERTY(Transient)
 	TObjectPtr<UCapsuleComponent> MovementCapsule;
 
 	double NextDamageTime = 0.0;
 	double NextEffectTime = 0.0;
+	double NextPredictedEffectTime = 0.0;
+	double LastPredictedEffectTime = -1000.0;
+	uint16 ServerImpactSequence = 0;
+	uint16 LocalImpactSequence = 0;
+	FCombatImpactEvent LastPredictedImpact;
 };

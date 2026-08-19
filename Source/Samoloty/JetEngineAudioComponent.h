@@ -33,6 +33,14 @@ protected:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Plane|Audio|Engine", meta=(ClampMin="0"))
 	float MasterVolume = 1.0f;
 
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Plane|Audio|Engine",
+		meta=(ClampMin="0", ClampMax="2"))
+	float SlowLoopVolumeScale = 0.8f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Plane|Audio|Engine",
+		meta=(ClampMin="0", ClampMax="2"))
+	float NormalLoopVolumeScale = 0.8f;
+
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Plane|Audio|Engine", meta=(ClampMin="0.1"))
 	float CrossfadeSpeed = 6.0f;
 

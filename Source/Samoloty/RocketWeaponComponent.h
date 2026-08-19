@@ -35,6 +35,7 @@ public:
 	virtual void SetFirePoints(USceneComponent* LeftPoint, USceneComponent* RightPoint) override;
 
 	virtual void SetFireHeld(bool bHeld) override;
+	virtual void StartEquipCooldown() override;
 	virtual bool GetCooldownStatus(float& OutRemainingSeconds,
 		float& OutDurationSeconds) const override;
 

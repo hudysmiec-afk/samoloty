@@ -34,7 +34,7 @@ namespace QuickReversalTuning
 UQuickReversalComponent::UQuickReversalComponent()
 {
 	PrimaryComponentTick.bCanEverTick = false;
-	SetIsReplicatedByDefault(true);
+	SetIsReplicatedByDefault(false);
 }
 
 void UQuickReversalComponent::BeginPlay()
@@ -169,6 +169,12 @@ void UQuickReversalComponent::StartAuthoritativeReversal(
 }
 
 void UQuickReversalComponent::MulticastPlayQuickReversalSound_Implementation()
+
+{
+	PlayPredictedActivationEffect();
+}
+
+void UQuickReversalComponent::PlayPredictedActivationEffect()
 {
 	if (QuickReversalSound && GetNetMode() != NM_DedicatedServer && GetOwner()
 		&& GetOwner()->GetRootComponent())
@@ -176,6 +182,16 @@ void UQuickReversalComponent::MulticastPlayQuickReversalSound_Implementation()
 		UGameplayStatics::SpawnSoundAttached(
 			QuickReversalSound, GetOwner()->GetRootComponent());
 	}
+}
+
+bool UQuickReversalComponent::IsReversalActive() const
+{
+	return CachedFlightComponent && CachedFlightComponent->IsQuickReversalActive();
+}
+
+bool UQuickReversalComponent::IsWeaponFireBlocked() const
+{
+	return IsReversalActive();
 }
 
 bool UQuickReversalComponent::GetAuthoritativeFlightRotation(FQuat& OutRotation) const
@@ -258,32 +274,25 @@ void UQuickReversalComponent::OnRep_ReversalState()
 
 float UQuickReversalComponent::GetCooldownRemaining() const
 {
-	const bool bAuthority = GetOwner() && GetOwner()->HasAuthority();
-	const double EndTime = bAuthority ? NextAllowedServerTime : LocalNextAllowedTime;
-	const double Now = bAuthority ? GetSynchronizedTime() : GetLocalTime();
-	return static_cast<float>(FMath::Max(0.0, EndTime - Now));
+	return CachedFlightComponent
+		? CachedFlightComponent->GetQuickReversalCooldownRemaining() : 0.0f;
 }
 
 float UQuickReversalComponent::GetManeuverProgress() const
 {
-	if (!ReversalState.bActive)
-	{
-		return 0.0f;
-	}
-	return FMath::Clamp(static_cast<float>(
-		(GetSynchronizedTime() - ReversalState.ServerStartTime) / QuickReversalTuning::Duration),
-		0.0f, 1.0f);
+	return CachedFlightComponent && CachedFlightComponent->IsQuickReversalActive()
+		? CachedFlightComponent->GetMobilityProgress() : 0.0f;
 }
 
 float UQuickReversalComponent::GetDirectionSign() const
 {
-	return ReversalState.Direction == EQuickReversalDirection::Left ? -1.0f : 1.0f;
+	return CachedFlightComponent ? CachedFlightComponent->GetMobilityDirection() : 1.0f;
 }
 
 FQuat UQuickReversalComponent::GetPresentationRelativeRotation(
 	const FQuat& FlightRootRotation) const
 {
-	if (!ReversalState.bActive)
+	if (!IsReversalActive())
 	{
 		return FQuat::Identity;
 	}
@@ -294,6 +303,8 @@ FQuat UQuickReversalComponent::GetPresentationRelativeRotation(
 
 FQuat UQuickReversalComponent::BuildManeuverWorldRotation(const float Progress) const
 {
+	const FQuat StartRotation = CachedFlightComponent
+		? CachedFlightComponent->GetMobilityInitialRotation() : InitialFlightRotation;
 	const float FlipAlpha = FMath::SmoothStep(
 		QuickReversalTuning::RotationStart,
 		QuickReversalTuning::RotationEnd,
@@ -312,7 +323,7 @@ FQuat UQuickReversalComponent::BuildManeuverWorldRotation(const float Progress) 
 	const FQuat UprightRoll(
 		FVector::ForwardVector,
 		FMath::DegreesToRadians(180.0f * GetDirectionSign() * UprightAlpha));
-	return (InitialFlightRotation * ForwardFlip * UprightRoll).GetNormalized();
+	return (StartRotation * ForwardFlip * UprightRoll).GetNormalized();
 }
 
 FVector UQuickReversalComponent::BuildManeuverArcOffset(const float Progress) const
@@ -333,12 +344,14 @@ FVector UQuickReversalComponent::BuildManeuverArcOffset(const float Progress) co
 
 FVector UQuickReversalComponent::GetManeuverUpAxis() const
 {
-	return InitialFlightRotation.GetUpVector().GetSafeNormal();
+	return (CachedFlightComponent
+		? CachedFlightComponent->GetMobilityInitialRotation() : InitialFlightRotation)
+		.GetUpVector().GetSafeNormal();
 }
 
 float UQuickReversalComponent::GetEngineCutAlpha() const
 {
-	if (!ReversalState.bActive)
+	if (!IsReversalActive())
 	{
 		return 0.0f;
 	}
@@ -353,7 +366,7 @@ float UQuickReversalComponent::GetEngineCutAlpha() const
 
 float UQuickReversalComponent::GetSkillBoostAlpha() const
 {
-	if (!ReversalState.bActive)
+	if (!IsReversalActive())
 	{
 		return 0.0f;
 	}
@@ -368,7 +381,7 @@ float UQuickReversalComponent::GetSkillBoostAlpha() const
 
 float UQuickReversalComponent::GetFlightBankBlendAlpha() const
 {
-	if (!ReversalState.bActive)
+	if (!IsReversalActive())
 	{
 		return 1.0f;
 	}

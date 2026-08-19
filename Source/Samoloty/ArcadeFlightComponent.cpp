@@ -2,14 +2,17 @@
 
 #include "ArcadeJetPawn.h"
 #include "BackwardDashComponent.h"
+#include "BlinkComponent.h"
 #include "EvasiveRollComponent.h"
 #include "ForwardDashComponent.h"
 #include "FlightBoundsVolume.h"
 #include "JetBoostComponent.h"
 #include "JetStatsComponent.h"
+#include "PlaneFlightNetworkSimulation.h"
 #include "QuickReversalComponent.h"
+#include "NetworkPredictionProxyWrite.h"
+#include "NetworkPredictionProxyInit.h"
 #include "GameFramework/Actor.h"
-#include "GameFramework/GameStateBase.h"
 #include "GameFramework/Pawn.h"
 #include "EngineUtils.h"
 #include "Net/UnrealNetwork.h"
@@ -26,6 +29,32 @@ namespace ArcadeFlightTuning
 	constexpr float MaxVisualBankDegrees = 72.0f;
 	constexpr float HoverExitRotationResponseScale = 1.75f;
 	constexpr float HoverExitControlPitchTolerance = 0.5f;
+	constexpr float EvasiveRollDuration = 1.0f;
+	constexpr float EvasiveRollCooldown = 3.0f;
+	constexpr float BackwardTravelDuration = 1.50f;
+	constexpr float BackwardRecoveryDuration = 0.35f;
+	constexpr float BackwardDuration = BackwardTravelDuration + BackwardRecoveryDuration;
+	constexpr float BackwardCooldown = 4.0f;
+	constexpr float BackwardTravelDistance = 20000.0f;
+	constexpr float BackwardLateralResponse = 5.0f;
+	constexpr float ForwardDashDuration = 2.0f;
+	constexpr float ForwardDashCooldown = 6.0f;
+	constexpr float ForwardDashAccelerationDuration = 0.20f;
+	constexpr float ForwardDashSpeedMultiplier = 4.0f;
+	constexpr float QuickReversalDuration = 1.20f;
+	constexpr float QuickReversalCooldown = 4.0f;
+	constexpr float QuickRotationStart = 0.02f;
+	constexpr float QuickRotationEnd = 0.62f;
+	constexpr float QuickUprightStart = 0.62f;
+	constexpr float QuickUprightEnd = 0.88f;
+	constexpr float QuickCoastEnd = 0.58f;
+	constexpr float QuickThrustStart = 0.54f;
+	constexpr float QuickThrustFull = 0.94f;
+	constexpr float QuickLateralResponse = 5.0f;
+	constexpr float QuickArcRadius = 300.0f;
+	constexpr float BlinkDistance = 10000.0f;
+	constexpr float BlinkCooldown = 8.0f;
+	constexpr float BlinkCameraRecoveryDuration = 0.35f;
 }
 
 UArcadeFlightComponent::UArcadeFlightComponent()
@@ -33,36 +62,21 @@ UArcadeFlightComponent::UArcadeFlightComponent()
 	PrimaryComponentTick.bCanEverTick = true;
 	PrimaryComponentTick.TickGroup = TG_PrePhysics;
 	SetIsReplicatedByDefault(true);
+	bWantsInitializeComponent = true;
 }
 
 void UArcadeFlightComponent::BeginPlay()
 {
 	Super::BeginPlay();
+	CacheDependencies();
 	if (AActor* Owner = GetOwner())
 	{
-		CachedStatsComponent = Owner->FindComponentByClass<UJetStatsComponent>();
-		CachedBoostComponent = Owner->FindComponentByClass<UJetBoostComponent>();
-		CachedEvasiveRollComponent = Owner->FindComponentByClass<UEvasiveRollComponent>();
-		CachedQuickReversalComponent = Owner->FindComponentByClass<UQuickReversalComponent>();
-		CachedBackwardDashComponent = Owner->FindComponentByClass<UBackwardDashComponent>();
-		CachedForwardDashComponent = Owner->FindComponentByClass<UForwardDashComponent>();
-		for (TActorIterator<AFlightBoundsVolume> It(GetWorld()); It; ++It)
-		{
-			CachedFlightBounds = *It;
-			break;
-		}
 		// Input is collected by the Pawn first. Flight then updates the authoritative
 		// transform before the local camera and weapon aim are refreshed.
 		AddTickPrerequisiteActor(Owner);
 		if (CachedBoostComponent)
 		{
 			AddTickPrerequisiteComponent(CachedBoostComponent);
-		}
-		if (Owner->HasAuthority())
-		{
-			ServerState.Location = Owner->GetActorLocation();
-			ServerState.Rotation = Owner->GetActorRotation();
-			ServerState.ServerTimeSeconds = GetWorld()->GetTimeSeconds();
 		}
 		if (CachedStatsComponent)
 		{
@@ -80,65 +94,401 @@ void UArcadeFlightComponent::SetLocalFlightInput(const FVector2D& Steering, cons
 	RawBrake = FMath::Clamp(Brake, 0.0f, 1.0f);
 }
 
-void UArcadeFlightComponent::ToggleHover()
+void UArcadeFlightComponent::SetLocalBoostRequested(const bool bRequested)
 {
-	if (HoverState == EArcadeHoverState::Flying)
+	bLocalBoostInputRequested = bRequested;
+	bRawBoostRequested = bRequested;
+}
+
+void UArcadeFlightComponent::QueuePredictedAbility(
+	const EPlaneAbilityType Type, const float Direction, const FVector2D MovementInput)
+{
+	if (Type == EPlaneAbilityType::None)
 	{
-		// Lock local combat immediately instead of waiting for the server round trip.
+		return;
+	}
+	++RawAbilitySequence;
+	if (RawAbilitySequence == 0)
+	{
+		++RawAbilitySequence;
+	}
+	RawAbilityType = Type;
+	RawAbilityDirection = FMath::Clamp(Direction, -1.0f, 1.0f);
+	RawAbilityMovementInput = FVector2D(
+		FMath::Clamp(MovementInput.X, -1.0f, 1.0f),
+		FMath::Clamp(MovementInput.Y, -1.0f, 1.0f));
+}
+
+float UArcadeFlightComponent::GetEvasiveRollProgress() const
+{
+	return bEvasiveRollActive
+		? FMath::Clamp(EvasiveRollElapsed / ArcadeFlightTuning::EvasiveRollDuration, 0.0f, 1.0f)
+		: 0.0f;
+}
+
+bool UArcadeFlightComponent::IsQuickReversalActive() const
+{
+	return ActiveMobilityAbility == EPlaneAbilityType::QuickReversal;
+}
+
+bool UArcadeFlightComponent::IsBackwardDashActive() const
+{
+	return ActiveMobilityAbility == EPlaneAbilityType::BackwardDash;
+}
+
+bool UArcadeFlightComponent::IsForwardDashActive() const
+{
+	return ActiveMobilityAbility == EPlaneAbilityType::ForwardDash;
+}
+
+float UArcadeFlightComponent::GetMobilityProgress() const
+{
+	float Duration = 1.0f;
+	switch (ActiveMobilityAbility)
+	{
+	case EPlaneAbilityType::QuickReversal:
+		Duration = ArcadeFlightTuning::QuickReversalDuration;
+		break;
+	case EPlaneAbilityType::BackwardDash:
+		Duration = ArcadeFlightTuning::BackwardDuration;
+		break;
+	case EPlaneAbilityType::ForwardDash:
+		Duration = ArcadeFlightTuning::ForwardDashDuration;
+		break;
+	default:
+		return 0.0f;
+	}
+	return FMath::Clamp(MobilityElapsed / Duration, 0.0f, 1.0f);
+}
+
+void UArcadeFlightComponent::CacheDependencies()
+{
+	AActor* Owner = GetOwner();
+	if (!Owner)
+	{
+		return;
+	}
+	CachedStatsComponent = Owner->FindComponentByClass<UJetStatsComponent>();
+	CachedBoostComponent = Owner->FindComponentByClass<UJetBoostComponent>();
+	CachedEvasiveRollComponent = Owner->FindComponentByClass<UEvasiveRollComponent>();
+	CachedQuickReversalComponent = Owner->FindComponentByClass<UQuickReversalComponent>();
+	CachedBackwardDashComponent = Owner->FindComponentByClass<UBackwardDashComponent>();
+	CachedForwardDashComponent = Owner->FindComponentByClass<UForwardDashComponent>();
+	CachedBlinkComponent = Owner->FindComponentByClass<UBlinkComponent>();
+	if (!CachedFlightBounds && GetWorld())
+	{
+		for (TActorIterator<AFlightBoundsVolume> It(GetWorld()); It; ++It)
+		{
+			CachedFlightBounds = *It;
+			break;
+		}
+	}
+}
+
+void UArcadeFlightComponent::InitializeNetworkPredictionProxy()
+{
+	CacheDependencies();
+	OwnedNetworkSimulation = MakePimpl<FPlaneFlightNetworkSimulation>(this);
+	NetworkPredictionProxy.Init<FPlaneFlightModelDef>(
+		GetWorld(), GetReplicationProxies(), OwnedNetworkSimulation.Get(), this);
+}
+
+void UArcadeFlightComponent::ProduceInput(
+	const int32 DeltaTimeMS, FPlaneFlightInputCmd* Cmd)
+{
+	if (!Cmd)
+	{
+		return;
+	}
+	Cmd->Steering = FVector2D(
+		FMath::Clamp(RawSteering.X, -1.0f, 1.0f),
+		FMath::Clamp(RawSteering.Y, -1.0f, 1.0f));
+	Cmd->Strafe = FMath::Clamp(RawStrafe, -1.0f, 1.0f);
+	Cmd->Brake = FMath::Clamp(RawBrake, 0.0f, 1.0f);
+	Cmd->bBoostRequested = bLocalBoostInputRequested;
+	Cmd->bHoverRequested = bLocalHoverInputRequested;
+	Cmd->AbilitySequence = RawAbilitySequence;
+	Cmd->AbilityType = static_cast<uint8>(RawAbilityType);
+	Cmd->AbilityDirection = RawAbilityDirection;
+	Cmd->AbilityMovementInput = RawAbilityMovementInput;
+}
+
+void UArcadeFlightComponent::InitializeSimulationState(
+	FPlaneFlightSyncState* SyncState, FPlaneFlightAuxState* AuxState)
+{
+	CacheDependencies();
+	if (SyncState)
+	{
+		if (CachedStatsComponent && CurrentForwardSpeed <= UE_SMALL_NUMBER)
+		{
+			const FJetFlightStats& Stats = CachedStatsComponent->GetFlightStats();
+			CurrentForwardSpeed = Stats.ForwardSpeed;
+			CurrentBoostEnergy = Stats.MaxBoostEnergy;
+			CurrentVelocity = GetOwner()
+				? GetOwner()->GetActorForwardVector() * CurrentForwardSpeed
+				: FVector::ZeroVector;
+		}
+		CaptureNetworkSyncState(*SyncState);
+	}
+	if (AuxState && CachedStatsComponent)
+	{
+		AuxState->FlightStats = CachedStatsComponent->GetFlightStats();
+	}
+}
+
+void UArcadeFlightComponent::CaptureNetworkSyncState(
+	FPlaneFlightSyncState& State) const
+{
+	if (const AActor* Owner = GetOwner())
+	{
+		State.Location = Owner->GetActorLocation();
+		State.Rotation = Owner->GetActorRotation().GetNormalized();
+	}
+	State.Velocity = CurrentVelocity;
+	State.SmoothedSteering = SmoothedSteering;
+	State.SmoothedStrafe = SmoothedStrafe;
+	State.SmoothedBrake = SmoothedBrake;
+	State.ForwardSpeed = CurrentForwardSpeed;
+	State.VisualBankDegrees = CurrentVisualBankDegrees;
+	State.BoostEnergy = CurrentBoostEnergy;
+	State.BoostAlpha = CurrentBoostAlpha;
+	State.BoostRegenDelayRemaining = BoostRegenDelayRemaining;
+	State.bBoosting = bCurrentBoosting;
+	State.HoverPresentationAlpha = HoverPresentationAlpha;
+	State.HoverState = static_cast<uint8>(HoverState);
+	State.LastProcessedAbilitySequence = LastProcessedAbilitySequence;
+	State.ActiveMobilityAbility = static_cast<uint8>(ActiveMobilityAbility);
+	State.MobilityElapsed = MobilityElapsed;
+	State.MobilityDirection = MobilityDirection;
+	State.MobilityInitialRotation = MobilityInitialRotation;
+	State.MobilityInitialForwardVelocity = MobilityInitialForwardVelocity;
+	State.MobilityLateralVelocity = MobilityLateralVelocity;
+	State.MobilityPreviousPathOffset = MobilityPreviousPathOffset;
+	State.MobilityInitialForwardSpeed = MobilityInitialForwardSpeed;
+	State.bEvasiveRollActive = bEvasiveRollActive;
+	State.EvasiveRollElapsed = EvasiveRollElapsed;
+	State.EvasiveRollDirection = EvasiveRollDirection;
+	State.EvasiveRollCooldownRemaining = EvasiveRollCooldownRemaining;
+	State.QuickReversalCooldownRemaining = QuickReversalCooldownRemaining;
+	State.BackwardDashCooldownRemaining = BackwardDashCooldownRemaining;
+	State.ForwardDashCooldownRemaining = ForwardDashCooldownRemaining;
+	State.BlinkCooldownRemaining = BlinkCooldownRemaining;
+	State.BlinkCameraRecoveryRemaining = BlinkCameraRecoveryRemaining;
+	State.QueuedAbilityType = static_cast<uint8>(QueuedAbilityType);
+	State.QueuedAbilityDirection = QueuedAbilityDirection;
+	State.QueuedAbilityMovementInput = QueuedAbilityMovementInput;
+	State.QueuedAbilitySequence = QueuedAbilitySequence;
+	State.LastActivatedAbilitySequence = LastActivatedAbilitySequence;
+	State.LastActivatedAbilityType = static_cast<uint8>(LastActivatedAbilityType);
+	State.LastBlinkDeparture = LastBlinkDeparture;
+	State.LastBlinkArrival = LastBlinkArrival;
+	State.bBoundaryReturnActive = bBoundaryReturnActive;
+	State.BoundaryReturnTarget = BoundaryReturnTarget;
+	State.BoundaryTurnVisualInput = BoundaryTurnVisualInput;
+	State.MovementEpoch = MovementEpoch;
+}
+
+void UArcadeFlightComponent::ApplyNetworkSyncState(
+	const FPlaneFlightSyncState& State, const ETeleportType TeleportType,
+	const ENetworkStateApplication Application)
+{
+	AArcadeJetPawn* Plane = Cast<AArcadeJetPawn>(GetOwner());
+	AActor* Owner = GetOwner();
+	const bool bRemotePresentation = Plane && Owner
+		&& !Owner->HasAuthority() && !Plane->IsLocallyControlled();
+	if (bRemotePresentation && Application == ENetworkStateApplication::Presentation)
+	{
+		// Network Prediction supplies an already interpolated pose here. Keep the
+		// actor at its logical simulated state and move only the visible assembly.
+		// Applying this pose to the actor as well caused a logical/presentation
+		// ping-pong every frame, most visible when lateral velocity changed on A/D.
+		Plane->SetRemoteNetworkPresentationTransform(State.Location, State.Rotation);
+		Plane->SetVisualBank(State.VisualBankDegrees);
+		return;
+	}
+	if (Owner)
+	{
+		const bool bTransformDiffers = !Owner->GetActorLocation().Equals(State.Location, 0.01f)
+			|| !Owner->GetActorRotation().Equals(State.Rotation, 0.01f);
+		if (bTransformDiffers)
+		{
+			Owner->SetActorLocationAndRotation(
+				State.Location, State.Rotation, false, nullptr, TeleportType);
+		}
+	}
+	CurrentVelocity = State.Velocity;
+	SmoothedSteering = State.SmoothedSteering;
+	SmoothedStrafe = State.SmoothedStrafe;
+	SmoothedBrake = State.SmoothedBrake;
+	CurrentForwardSpeed = State.ForwardSpeed;
+	CurrentVisualBankDegrees = State.VisualBankDegrees;
+	CurrentBoostEnergy = State.BoostEnergy;
+	CurrentBoostAlpha = State.BoostAlpha;
+	BoostRegenDelayRemaining = State.BoostRegenDelayRemaining;
+	bCurrentBoosting = State.bBoosting;
+	HoverPresentationAlpha = State.HoverPresentationAlpha;
+	HoverState = static_cast<EArcadeHoverState>(State.HoverState);
+	LastProcessedAbilitySequence = State.LastProcessedAbilitySequence;
+	ActiveMobilityAbility = static_cast<EPlaneAbilityType>(State.ActiveMobilityAbility);
+	MobilityElapsed = State.MobilityElapsed;
+	MobilityDirection = State.MobilityDirection;
+	MobilityInitialRotation = State.MobilityInitialRotation;
+	MobilityInitialForwardVelocity = State.MobilityInitialForwardVelocity;
+	MobilityLateralVelocity = State.MobilityLateralVelocity;
+	MobilityPreviousPathOffset = State.MobilityPreviousPathOffset;
+	MobilityInitialForwardSpeed = State.MobilityInitialForwardSpeed;
+	bEvasiveRollActive = State.bEvasiveRollActive;
+	EvasiveRollElapsed = State.EvasiveRollElapsed;
+	EvasiveRollDirection = State.EvasiveRollDirection;
+	EvasiveRollCooldownRemaining = State.EvasiveRollCooldownRemaining;
+	QuickReversalCooldownRemaining = State.QuickReversalCooldownRemaining;
+	BackwardDashCooldownRemaining = State.BackwardDashCooldownRemaining;
+	ForwardDashCooldownRemaining = State.ForwardDashCooldownRemaining;
+	BlinkCooldownRemaining = State.BlinkCooldownRemaining;
+	BlinkCameraRecoveryRemaining = State.BlinkCameraRecoveryRemaining;
+	QueuedAbilityType = static_cast<EPlaneAbilityType>(State.QueuedAbilityType);
+	QueuedAbilityDirection = State.QueuedAbilityDirection;
+	QueuedAbilityMovementInput = State.QueuedAbilityMovementInput;
+	QueuedAbilitySequence = State.QueuedAbilitySequence;
+	LastActivatedAbilitySequence = State.LastActivatedAbilitySequence;
+	LastActivatedAbilityType = static_cast<EPlaneAbilityType>(State.LastActivatedAbilityType);
+	LastBlinkDeparture = State.LastBlinkDeparture;
+	LastBlinkArrival = State.LastBlinkArrival;
+	bBoundaryReturnActive = State.bBoundaryReturnActive;
+	BoundaryReturnTarget = State.BoundaryReturnTarget;
+	BoundaryTurnVisualInput = State.BoundaryTurnVisualInput;
+	MovementEpoch = State.MovementEpoch;
+	if (Plane)
+	{
+		Plane->SetVisualBank(CurrentVisualBankDegrees);
+	}
+	PlayAbilityEffectIfNeeded();
+}
+
+void UArcadeFlightComponent::RestoreFrame(
+	const FPlaneFlightSyncState* SyncState, const FPlaneFlightAuxState* AuxState)
+{
+	if (SyncState)
+	{
+		ApplyNetworkSyncState(*SyncState, ETeleportType::TeleportPhysics,
+			ENetworkStateApplication::Restore);
+	}
+}
+
+void UArcadeFlightComponent::FinalizeFrame(
+	const FPlaneFlightSyncState* SyncState, const FPlaneFlightAuxState* AuxState)
+{
+	if (SyncState)
+	{
+		ApplyNetworkSyncState(*SyncState, ETeleportType::TeleportPhysics,
+			ENetworkStateApplication::Finalize);
+	}
+}
+
+void UArcadeFlightComponent::FinalizeSmoothingFrame(
+	const FPlaneFlightSyncState* SyncState, const FPlaneFlightAuxState* AuxState)
+{
+	if (SyncState)
+	{
+		// FixedTickSmoothing calculates an interpolated presentation state every
+		// rendered frame. Without this callback the result is never applied and the
+		// aircraft remains visibly stepped at the 60 Hz simulation rate.
+		ApplyNetworkSyncState(
+			*SyncState, ETeleportType::TeleportPhysics,
+			ENetworkStateApplication::Presentation);
+	}
+}
+
+void UArcadeFlightComponent::RunNetworkSimulationStep(
+	const float DeltaTime,
+	const FPlaneFlightInputCmd& InputCmd,
+	const FPlaneFlightSyncState& InputState,
+	const FPlaneFlightAuxState& AuxState,
+	FPlaneFlightSyncState& OutputState)
+{
+	if (!GetOwner() || DeltaTime <= UE_SMALL_NUMBER)
+	{
+		OutputState = InputState;
+		return;
+	}
+
+	ApplyNetworkSyncState(InputState, ETeleportType::TeleportPhysics,
+		ENetworkStateApplication::Simulation);
+	RawSteering = InputCmd.Steering;
+	RawStrafe = InputCmd.Strafe;
+	RawBrake = InputCmd.Brake;
+	bRawBoostRequested = InputCmd.bBoostRequested;
+	bRawHoverRequested = InputCmd.bHoverRequested;
+	RawAbilitySequence = InputCmd.AbilitySequence;
+	RawAbilityType = static_cast<EPlaneAbilityType>(InputCmd.AbilityType);
+	RawAbilityDirection = InputCmd.AbilityDirection;
+	RawAbilityMovementInput = InputCmd.AbilityMovementInput;
+
+	SimulateFlight(DeltaTime, AuxState.FlightStats);
+	CaptureNetworkSyncState(OutputState);
+}
+
+bool UArcadeFlightComponent::CanBeginHoverEntry() const
+{
+	const EPlaneAbilityType QueuedType =
+		static_cast<EPlaneAbilityType>(QueuedAbilityType);
+	const bool bNonRollAbilityQueued = QueuedType != EPlaneAbilityType::None
+		&& QueuedType != EPlaneAbilityType::EvasiveRollLeft
+		&& QueuedType != EPlaneAbilityType::EvasiveRollRight;
+	return !bBoundaryReturnActive
+		&& ActiveMobilityAbility == EPlaneAbilityType::None
+		&& !bNonRollAbilityQueued
+		&& BlinkCameraRecoveryRemaining <= UE_SMALL_NUMBER;
+}
+
+bool UArcadeFlightComponent::ToggleHover()
+{
+	// Boundary return owns the aircraft until it is safely back inside. Reject
+	// new hover requests locally instead of letting prediction start an entry.
+	if (!bLocalHoverInputRequested && !CanBeginHoverEntry())
+	{
+		return false;
+	}
+
+	bLocalHoverInputRequested = !bLocalHoverInputRequested;
+	bRawHoverRequested = bLocalHoverInputRequested;
+	if (bRawHoverRequested && HoverState == EArcadeHoverState::Flying)
+	{
+		// Lock combat for the fraction of a frame before the next predicted step.
 		bLocalHoverEntryPending = true;
 	}
-	if (GetOwner()->HasAuthority())
-	{
-		SetAuthoritativeHoverState(
-			HoverState == EArcadeHoverState::Flying || HoverState == EArcadeHoverState::Leaving
-				? EArcadeHoverState::Entering : EArcadeHoverState::Leaving);
-	}
-	else
-	{
-		ServerToggleHover();
-	}
+	return true;
 }
 
 void UArcadeFlightComponent::RequestExitHover()
 {
-	if (GetOwner()->HasAuthority())
+	bLocalHoverInputRequested = false;
+	bRawHoverRequested = false;
+	bLocalHoverEntryPending = false;
+}
+
+void UArcadeFlightComponent::CancelHoverEntryFromCollision()
+{
+	bRawHoverRequested = false;
+	bLocalHoverEntryPending = false;
+	if (const APawn* OwnerPawn = Cast<APawn>(GetOwner());
+		OwnerPawn && OwnerPawn->IsLocallyControlled())
 	{
-		if (HoverState != EArcadeHoverState::Flying)
-		{
-			SetAuthoritativeHoverState(EArcadeHoverState::Leaving);
-		}
+		bLocalHoverInputRequested = false;
 	}
-	else
+	if (HoverState == EArcadeHoverState::Entering)
 	{
-		ServerRequestExitHover();
+		SetSimulationHoverState(EArcadeHoverState::Leaving);
 	}
 }
 
-void UArcadeFlightComponent::ServerToggleHover_Implementation()
+void UArcadeFlightComponent::SetSimulationHoverState(const EArcadeHoverState NewState)
 {
-	ToggleHover();
-}
-
-void UArcadeFlightComponent::ServerRequestExitHover_Implementation()
-{
-	RequestExitHover();
-}
-
-void UArcadeFlightComponent::SetAuthoritativeHoverState(const EArcadeHoverState NewState)
-{
-	if (!GetOwner()->HasAuthority() || HoverState == NewState)
+	if (HoverState == NewState)
 	{
 		return;
 	}
 	HoverState = NewState;
-	if (NewState == EArcadeHoverState::Entering)
-	{
-		if (CachedBoostComponent)
-		{
-			CachedBoostComponent->SetBoostRequested(false);
-		}
-	}
-	GetOwner()->ForceNetUpdate();
 }
 
 void UArcadeFlightComponent::TickComponent(const float DeltaTime, const ELevelTick TickType,
@@ -150,38 +500,29 @@ void UArcadeFlightComponent::TickComponent(const float DeltaTime, const ELevelTi
 		bLocalHoverEntryPending = false;
 	}
 	const APawn* OwnerPawn = Cast<APawn>(GetOwner());
-	UpdateBoundaryState();
+	UpdateBoundaryWarning();
 	const UJetStatsComponent* StatsComponent = CachedStatsComponent;
-	if (StatsComponent)
+	if (GetOwner() && GetOwner()->HasAuthority() && StatsComponent)
 	{
-		UpdateHoverPresentation(DeltaTime, StatsComponent->GetFlightStats());
-	}
-	if (OwnerPawn && OwnerPawn->IsLocallyControlled() && !GetOwner()->HasAuthority())
-	{
-		TimeSinceInputSent += DeltaTime;
-		if (TimeSinceInputSent >= InputReplicationInterval)
+		const FPlaneFlightAuxState* CurrentAux =
+			NetworkPredictionProxy.ReadAuxState<FPlaneFlightAuxState>();
+		FPlaneFlightAuxState DesiredAux;
+		DesiredAux.FlightStats = StatsComponent->GetFlightStats();
+		if (!CurrentAux || DesiredAux.ShouldReconcile(*CurrentAux))
 		{
-			TimeSinceInputSent = 0.0f;
-			ServerSetFlightInput(RawSteering, RawStrafe, RawBrake);
+			NetworkPredictionProxy.WriteAuxState<FPlaneFlightAuxState>(
+				[&DesiredAux](FPlaneFlightAuxState& State)
+				{
+					State = DesiredAux;
+				}, "FlightStatsChanged");
 		}
 	}
-
-	if (GetOwner()->HasAuthority())
-	{
-		SimulateFlight(DeltaTime);
-		UpdateReplicatedState();
-	}
-	else
-	{
-		if (OwnerPawn && OwnerPawn->IsLocallyControlled() && StatsComponent)
-		{
-			UpdateLocalBrakePresentation(DeltaTime, StatsComponent->GetFlightStats());
-		}
-		InterpolateBufferedState();
-	}
-
 	if (OwnerPawn && OwnerPawn->IsLocallyControlled())
 	{
+		if (bBoundaryReturnActive && bLocalHoverInputRequested)
+		{
+			RequestExitHover();
+		}
 		if (AArcadeJetPawn* Plane = Cast<AArcadeJetPawn>(GetOwner()))
 		{
 			Plane->UpdateCameraAfterFlight(DeltaTime);
@@ -195,13 +536,6 @@ void UArcadeFlightComponent::UpdateHoverPresentation(const float DeltaTime, cons
 		|| HoverState == EArcadeHoverState::Hovering;
 	HoverPresentationAlpha = FMath::FInterpTo(HoverPresentationAlpha, bHoverActive ? 1.0f : 0.0f,
 		DeltaTime, Stats.HoverRotationResponse);
-}
-
-void UArcadeFlightComponent::UpdateLocalBrakePresentation(
-	const float DeltaTime, const FJetFlightStats& Stats)
-{
-	SmoothedBrake = FMath::FInterpTo(
-		SmoothedBrake, RawBrake, DeltaTime, Stats.BrakeInputResponseSpeed);
 }
 
 void UArcadeFlightComponent::UpdateSmoothedInput(
@@ -224,46 +558,373 @@ void UArcadeFlightComponent::UpdateSmoothedInput(
 		SmoothedBrake, RawBrake, DeltaTime, Stats.BrakeInputResponseSpeed);
 }
 
-void UArcadeFlightComponent::ServerSetFlightInput_Implementation(
-	const FVector2D Steering, const float Strafe, const float Brake)
+void UArcadeFlightComponent::SimulateFlight(
+	const float DeltaTime, const FJetFlightStats& Stats)
 {
-	RawSteering.X = FMath::Clamp(Steering.X, -1.0f, 1.0f);
-	RawSteering.Y = FMath::Clamp(Steering.Y, -1.0f, 1.0f);
-	RawStrafe = FMath::Clamp(Strafe, -1.0f, 1.0f);
-	RawBrake = FMath::Clamp(Brake, 0.0f, 1.0f);
-}
-
-void UArcadeFlightComponent::SimulateFlight(const float DeltaTime)
-{
-	if (!CachedStatsComponent)
-	{
-		return;
-	}
-
-	const FJetFlightStats& Stats = CachedStatsComponent->GetFlightStats();
+	UpdateBoundaryState();
+	UpdatePredictedHoverRequest();
+	UpdatePredictedAbilities(DeltaTime, Stats);
+	UpdateHoverPresentation(DeltaTime, Stats);
 	UpdateSmoothedInput(DeltaTime, Stats);
+	UpdatePredictedBoost(DeltaTime, Stats);
 	RotateAircraft(DeltaTime, Stats);
 	UpdateVisualBank(DeltaTime);
 	MoveAircraft(DeltaTime, Stats);
 }
 
+void UArcadeFlightComponent::UpdatePredictedAbilities(
+	const float DeltaTime, const FJetFlightStats& Stats)
+{
+	EvasiveRollCooldownRemaining = FMath::Max(0.0f,
+		EvasiveRollCooldownRemaining - DeltaTime);
+	QuickReversalCooldownRemaining = FMath::Max(0.0f,
+		QuickReversalCooldownRemaining - DeltaTime);
+	BackwardDashCooldownRemaining = FMath::Max(0.0f,
+		BackwardDashCooldownRemaining - DeltaTime);
+	ForwardDashCooldownRemaining = FMath::Max(0.0f,
+		ForwardDashCooldownRemaining - DeltaTime);
+	BlinkCooldownRemaining = FMath::Max(0.0f, BlinkCooldownRemaining - DeltaTime);
+	BlinkCameraRecoveryRemaining = FMath::Max(0.0f,
+		BlinkCameraRecoveryRemaining - DeltaTime);
+
+	if (bEvasiveRollActive)
+	{
+		EvasiveRollElapsed += DeltaTime;
+		if (EvasiveRollElapsed >= ArcadeFlightTuning::EvasiveRollDuration)
+		{
+			bEvasiveRollActive = false;
+			EvasiveRollElapsed = ArcadeFlightTuning::EvasiveRollDuration;
+		}
+	}
+	if (ActiveMobilityAbility != EPlaneAbilityType::None)
+	{
+		MobilityElapsed += DeltaTime;
+	}
+
+	if (RawAbilitySequence != 0
+		&& RawAbilitySequence != LastProcessedAbilitySequence)
+	{
+		ProcessAbilityRequest(RawAbilitySequence, RawAbilityType,
+			RawAbilityDirection, RawAbilityMovementInput, Stats);
+	}
+
+	if (QueuedAbilityType != EPlaneAbilityType::None
+		&& !IsAbilityBlocked(QueuedAbilityType))
+	{
+		const uint16 Sequence = QueuedAbilitySequence;
+		const EPlaneAbilityType Type = QueuedAbilityType;
+		const float Direction = QueuedAbilityDirection;
+		const FVector2D MovementInput = QueuedAbilityMovementInput;
+		QueuedAbilityType = EPlaneAbilityType::None;
+		QueuedAbilitySequence = 0;
+		TryStartAbility(Sequence, Type, Direction, MovementInput, Stats);
+	}
+}
+
+void UArcadeFlightComponent::ProcessAbilityRequest(
+	const uint16 Sequence, const EPlaneAbilityType Type, const float Direction,
+	const FVector2D& MovementInput, const FJetFlightStats& Stats)
+{
+	LastProcessedAbilitySequence = Sequence;
+	if (Type == EPlaneAbilityType::None
+		|| HoverState != EArcadeHoverState::Flying || bBoundaryReturnActive)
+	{
+		return;
+	}
+	if (IsAbilityBlocked(Type))
+	{
+		QueuedAbilityType = Type;
+		QueuedAbilityDirection = Direction;
+		QueuedAbilityMovementInput = MovementInput;
+		QueuedAbilitySequence = Sequence;
+		return;
+	}
+	TryStartAbility(Sequence, Type, Direction, MovementInput, Stats);
+}
+
+bool UArcadeFlightComponent::IsAbilityBlocked(const EPlaneAbilityType Type) const
+{
+	if (ActiveMobilityAbility == EPlaneAbilityType::QuickReversal)
+	{
+		return true;
+	}
+	switch (Type)
+	{
+	case EPlaneAbilityType::EvasiveRollLeft:
+	case EPlaneAbilityType::EvasiveRollRight:
+		return bEvasiveRollActive;
+	case EPlaneAbilityType::QuickReversal:
+		return bEvasiveRollActive || ActiveMobilityAbility != EPlaneAbilityType::None;
+	case EPlaneAbilityType::BackwardDash:
+	case EPlaneAbilityType::ForwardDash:
+	case EPlaneAbilityType::Blink:
+		return ActiveMobilityAbility != EPlaneAbilityType::None;
+	default:
+		return false;
+	}
+}
+
+bool UArcadeFlightComponent::TryStartAbility(
+	const uint16 Sequence, const EPlaneAbilityType Type, const float Direction,
+	const FVector2D& MovementInput, const FJetFlightStats& Stats)
+{
+	switch (Type)
+	{
+	case EPlaneAbilityType::EvasiveRollLeft:
+	case EPlaneAbilityType::EvasiveRollRight:
+		if (EvasiveRollCooldownRemaining > UE_SMALL_NUMBER || bEvasiveRollActive)
+		{
+			return false;
+		}
+		bEvasiveRollActive = true;
+		EvasiveRollElapsed = 0.0f;
+		EvasiveRollDirection = Type == EPlaneAbilityType::EvasiveRollLeft ? -1.0f : 1.0f;
+		EvasiveRollCooldownRemaining = ArcadeFlightTuning::EvasiveRollCooldown;
+		break;
+	case EPlaneAbilityType::QuickReversal:
+		if (QuickReversalCooldownRemaining > UE_SMALL_NUMBER)
+		{
+			return false;
+		}
+		StartMobilityAbility(Sequence, Type, Direction, Stats);
+		QuickReversalCooldownRemaining = ArcadeFlightTuning::QuickReversalCooldown;
+		break;
+	case EPlaneAbilityType::BackwardDash:
+		if (BackwardDashCooldownRemaining > UE_SMALL_NUMBER)
+		{
+			return false;
+		}
+		StartMobilityAbility(Sequence, Type, Direction, Stats);
+		BackwardDashCooldownRemaining = ArcadeFlightTuning::BackwardCooldown;
+		break;
+	case EPlaneAbilityType::ForwardDash:
+		if (ForwardDashCooldownRemaining > UE_SMALL_NUMBER)
+		{
+			return false;
+		}
+		StartMobilityAbility(Sequence, Type, Direction, Stats);
+		ForwardDashCooldownRemaining = ArcadeFlightTuning::ForwardDashCooldown;
+		break;
+	case EPlaneAbilityType::Blink:
+		if (BlinkCooldownRemaining > UE_SMALL_NUMBER)
+		{
+			return false;
+		}
+		ExecuteBlink(Sequence, MovementInput);
+		BlinkCooldownRemaining = ArcadeFlightTuning::BlinkCooldown;
+		break;
+	default:
+		return false;
+	}
+
+	LastActivatedAbilitySequence = Sequence;
+	LastActivatedAbilityType = Type;
+	return true;
+}
+
+void UArcadeFlightComponent::StartMobilityAbility(
+	const uint16 Sequence, const EPlaneAbilityType Type, const float Direction,
+	const FJetFlightStats& Stats)
+{
+	ActiveMobilityAbility = Type;
+	MobilityElapsed = 0.0f;
+	MobilityDirection = Direction < -0.05f ? -1.0f : 1.0f;
+	MobilityInitialRotation = GetOwner()->GetActorRotation();
+	const FVector InitialForward = MobilityInitialRotation.Vector();
+	MobilityInitialForwardVelocity = InitialForward
+		* FVector::DotProduct(CurrentVelocity, InitialForward);
+	MobilityLateralVelocity = CurrentVelocity - MobilityInitialForwardVelocity;
+	MobilityPreviousPathOffset = FVector::ZeroVector;
+	MobilityInitialForwardSpeed = FMath::Max(0.0f,
+		FVector::DotProduct(CurrentVelocity, InitialForward));
+	if (MobilityInitialForwardVelocity.IsNearlyZero())
+	{
+		MobilityInitialForwardVelocity = InitialForward * CurrentForwardSpeed;
+	}
+}
+
+void UArcadeFlightComponent::ExecuteBlink(
+	const uint16 Sequence, const FVector2D& MovementInput)
+{
+	AArcadeJetPawn* Plane = Cast<AArcadeJetPawn>(GetOwner());
+	if (!Plane)
+	{
+		return;
+	}
+	FVector2D SafeInput(
+		FMath::Clamp(MovementInput.X, -1.0f, 1.0f),
+		FMath::Clamp(MovementInput.Y, -1.0f, 1.0f));
+	if (SafeInput.IsNearlyZero())
+	{
+		SafeInput.X = 1.0f;
+	}
+	SafeInput.Normalize();
+	const FVector Direction = (
+		GetOwner()->GetActorForwardVector() * SafeInput.X
+		+ GetOwner()->GetActorRightVector() * SafeInput.Y).GetSafeNormal();
+	LastBlinkDeparture = GetOwner()->GetActorLocation();
+	Plane->MovePlaneWithCollision(Direction * ArcadeFlightTuning::BlinkDistance,
+		Direction * CurrentForwardSpeed, false);
+	LastBlinkArrival = GetOwner()->GetActorLocation();
+	BlinkCameraRecoveryRemaining = ArcadeFlightTuning::BlinkCameraRecoveryDuration;
+	++MovementEpoch;
+}
+
+void UArcadeFlightComponent::FinishMobilityAbility()
+{
+	if (ActiveMobilityAbility == EPlaneAbilityType::QuickReversal)
+	{
+		SmoothedSteering = FVector2D::ZeroVector;
+	}
+	ActiveMobilityAbility = EPlaneAbilityType::None;
+	MobilityElapsed = 0.0f;
+}
+
+void UArcadeFlightComponent::PlayAbilityEffectIfNeeded()
+{
+	if (LastActivatedAbilitySequence == 0
+		|| LastActivatedAbilitySequence == LastPresentedAbilitySequence)
+	{
+		return;
+	}
+	LastPresentedAbilitySequence = LastActivatedAbilitySequence;
+
+	switch (LastActivatedAbilityType)
+	{
+	case EPlaneAbilityType::QuickReversal:
+		if (CachedQuickReversalComponent)
+		{
+			CachedQuickReversalComponent->PlayPredictedActivationEffect();
+		}
+		break;
+	case EPlaneAbilityType::BackwardDash:
+		if (CachedBackwardDashComponent)
+		{
+			CachedBackwardDashComponent->PlayPredictedActivationEffect();
+		}
+		break;
+	case EPlaneAbilityType::ForwardDash:
+		if (CachedForwardDashComponent)
+		{
+			CachedForwardDashComponent->PlayPredictedActivationEffect();
+		}
+		break;
+	case EPlaneAbilityType::Blink:
+		if (CachedBlinkComponent)
+		{
+			CachedBlinkComponent->PlayPredictedActivationEffect(
+				LastBlinkDeparture, LastBlinkArrival);
+		}
+		break;
+	default:
+		break;
+	}
+}
+
+FQuat UArcadeFlightComponent::BuildQuickReversalRotation(const float Progress) const
+{
+	const float FlipAlpha = FMath::SmoothStep(
+		ArcadeFlightTuning::QuickRotationStart,
+		ArcadeFlightTuning::QuickRotationEnd, Progress);
+	const FQuat ForwardFlip(FVector::RightVector,
+		FMath::DegreesToRadians(180.0f * FlipAlpha));
+	const float UprightAlpha = FMath::SmoothStep(
+		ArcadeFlightTuning::QuickUprightStart,
+		ArcadeFlightTuning::QuickUprightEnd, Progress);
+	const FQuat UprightRoll(FVector::ForwardVector,
+		FMath::DegreesToRadians(180.0f * MobilityDirection * UprightAlpha));
+	return (MobilityInitialRotation.Quaternion()
+		* ForwardFlip * UprightRoll).GetNormalized();
+}
+
+FVector UArcadeFlightComponent::BuildQuickReversalArcOffset(const float Progress) const
+{
+	const float FlipAlpha = FMath::SmoothStep(
+		ArcadeFlightTuning::QuickRotationStart,
+		ArcadeFlightTuning::QuickRotationEnd, Progress);
+	const FQuat InitialRotation = MobilityInitialRotation.Quaternion();
+	const FVector PivotOffset = InitialRotation.GetForwardVector()
+		* ArcadeFlightTuning::QuickArcRadius;
+	const FQuat ArcRotation(InitialRotation.GetRightVector(),
+		FMath::DegreesToRadians(180.0f * FlipAlpha));
+	return PivotOffset + ArcRotation.RotateVector(-PivotOffset);
+}
+
+void UArcadeFlightComponent::UpdatePredictedHoverRequest()
+{
+	// Enforce the rule inside deterministic simulation as well. This keeps the
+	// server authoritative and also covers crossing the boundary on the same
+	// frame in which the player requested hover.
+	if (bBoundaryReturnActive)
+	{
+		bRawHoverRequested = false;
+	}
+
+	if (bRawHoverRequested)
+	{
+		if (HoverState == EArcadeHoverState::Flying
+			|| HoverState == EArcadeHoverState::Leaving)
+		{
+			SetSimulationHoverState(EArcadeHoverState::Entering);
+		}
+	}
+	else if (HoverState == EArcadeHoverState::Entering
+		|| HoverState == EArcadeHoverState::Hovering)
+	{
+		SetSimulationHoverState(EArcadeHoverState::Leaving);
+	}
+}
+
+void UArcadeFlightComponent::UpdatePredictedBoost(
+	const float DeltaTime, const FJetFlightStats& Stats)
+{
+	const bool bForwardDashActive = IsForwardDashActive();
+	const bool bMobilityOverride = bForwardDashActive
+		|| IsBackwardDashActive() || IsQuickReversalActive();
+	const bool bCanBoost = HoverState == EArcadeHoverState::Flying
+		&& !bMobilityOverride && bRawBoostRequested
+		&& CurrentBoostEnergy > KINDA_SMALL_NUMBER;
+	bCurrentBoosting = bCanBoost;
+
+	if (bCurrentBoosting)
+	{
+		CurrentBoostEnergy = FMath::Max(
+			0.0f, CurrentBoostEnergy - Stats.BoostEnergyDrainPerSecond * DeltaTime);
+		BoostRegenDelayRemaining = Stats.BoostRegenDelay;
+		if (CurrentBoostEnergy <= KINDA_SMALL_NUMBER)
+		{
+			bCurrentBoosting = false;
+		}
+	}
+	else if (!bForwardDashActive)
+	{
+		BoostRegenDelayRemaining = FMath::Max(
+			0.0f, BoostRegenDelayRemaining - DeltaTime);
+		if (BoostRegenDelayRemaining <= UE_SMALL_NUMBER)
+		{
+			CurrentBoostEnergy = FMath::Min(
+				Stats.MaxBoostEnergy,
+				CurrentBoostEnergy + Stats.BoostEnergyRegenPerSecond * DeltaTime);
+		}
+	}
+
+	CurrentBoostAlpha = FMath::FInterpTo(
+		CurrentBoostAlpha, bCurrentBoosting ? 1.0f : 0.0f,
+		DeltaTime, Stats.BoostResponseSpeed);
+}
+
 void UArcadeFlightComponent::UpdateBoundaryState()
 {
-	BoundaryWarningAlpha = 0.0f;
 	if (!CachedFlightBounds || !GetOwner())
 	{
 		return;
 	}
 
+	float IgnoredWarningAlpha = 0.0f;
 	bool bOutside = false;
 	CachedFlightBounds->GetBoundaryInfo(
-		GetOwner()->GetActorLocation(), BoundaryWarningAlpha, bOutside);
-	if (!GetOwner()->HasAuthority())
-	{
-		return;
-	}
+		GetOwner()->GetActorLocation(), IgnoredWarningAlpha, bOutside);
 
-	const bool bWasReturning = bBoundaryReturnActive;
 	if (!bBoundaryReturnActive && bOutside)
 	{
 		bBoundaryReturnActive = true;
@@ -280,23 +941,18 @@ void UArcadeFlightComponent::UpdateBoundaryState()
 		BoundaryReturnTarget = CachedFlightBounds->GetReturnTarget(
 			GetOwner()->GetActorLocation());
 	}
-	if (bWasReturning != bBoundaryReturnActive)
-	{
-		GetOwner()->ForceNetUpdate();
-	}
 }
 
-void UArcadeFlightComponent::UpdateReplicatedState()
+void UArcadeFlightComponent::UpdateBoundaryWarning()
 {
-	ServerState.Location = GetOwner()->GetActorLocation();
-	ServerState.Rotation = GetOwner()->GetActorRotation();
-	ServerState.Velocity = CurrentVelocity;
-	ServerState.VisualBankDegrees = CurrentVisualBankDegrees;
-	ServerState.BrakeAlpha = static_cast<uint8>(FMath::RoundToInt(
-		FMath::Clamp(SmoothedBrake, 0.0f, 1.0f) * 255.0f));
-	ServerState.ServerTimeSeconds = GetWorld()->GetTimeSeconds();
-	ServerState.bTeleport = bAuthoritativeTeleportPending;
-	bAuthoritativeTeleportPending = false;
+	BoundaryWarningAlpha = 0.0f;
+	if (!CachedFlightBounds || !GetOwner())
+	{
+		return;
+	}
+	bool bOutside = false;
+	CachedFlightBounds->GetBoundaryInfo(
+		GetOwner()->GetActorLocation(), BoundaryWarningAlpha, bOutside);
 }
 
 void UArcadeFlightComponent::NotifyAuthoritativeTeleport()
@@ -305,8 +961,12 @@ void UArcadeFlightComponent::NotifyAuthoritativeTeleport()
 	{
 		return;
 	}
-	bAuthoritativeTeleportPending = true;
-	UpdateReplicatedState();
+	++MovementEpoch;
+	NetworkPredictionProxy.WriteSyncState<FPlaneFlightSyncState>(
+		[this](FPlaneFlightSyncState& State)
+		{
+			CaptureNetworkSyncState(State);
+		}, "AuthoritativeTeleport");
 	GetOwner()->ForceNetUpdate();
 }
 
@@ -317,123 +977,16 @@ void UArcadeFlightComponent::PrepareStraightManeuverExit()
 		return;
 	}
 	SmoothedSteering = FVector2D::ZeroVector;
-}
-
-void UArcadeFlightComponent::OnRep_ServerState()
-{
-	FBufferedFlightState Snapshot;
-	Snapshot.Location = ServerState.Location;
-	Snapshot.Rotation = ServerState.Rotation.Quaternion();
-	Snapshot.Velocity = ServerState.Velocity;
-	Snapshot.VisualBankDegrees = ServerState.VisualBankDegrees;
-	Snapshot.BrakeAlpha = static_cast<float>(ServerState.BrakeAlpha) / 255.0f;
-	Snapshot.ServerTimeSeconds = ServerState.ServerTimeSeconds;
-
-	if (ServerState.bTeleport)
-	{
-		SnapshotBuffer.Reset();
-		SnapshotBuffer.Add(Snapshot);
-		GetOwner()->SetActorLocationAndRotation(Snapshot.Location, Snapshot.Rotation, false, nullptr,
-			ETeleportType::TeleportPhysics);
-		if (AArcadeJetPawn* Plane = Cast<AArcadeJetPawn>(GetOwner()))
+	NetworkPredictionProxy.WriteSyncState<FPlaneFlightSyncState>(
+		[](FPlaneFlightSyncState& State)
 		{
-			Plane->SetVisualBank(Snapshot.VisualBankDegrees);
-		}
-		if (const APawn* OwnerPawn = Cast<APawn>(GetOwner());
-			!OwnerPawn || !OwnerPawn->IsLocallyControlled())
-		{
-			SmoothedBrake = Snapshot.BrakeAlpha;
-		}
-		return;
-	}
-
-	if (!SnapshotBuffer.IsEmpty() && Snapshot.ServerTimeSeconds <= SnapshotBuffer.Last().ServerTimeSeconds)
-	{
-		return;
-	}
-	SnapshotBuffer.Add(Snapshot);
-	if (SnapshotBuffer.Num() > 32)
-	{
-		SnapshotBuffer.RemoveAt(0, SnapshotBuffer.Num() - 32, EAllowShrinking::No);
-	}
-
-	if (SnapshotBuffer.Num() == 1)
-	{
-		GetOwner()->SetActorLocationAndRotation(Snapshot.Location, Snapshot.Rotation, false, nullptr,
-			ETeleportType::TeleportPhysics);
-		if (AArcadeJetPawn* Plane = Cast<AArcadeJetPawn>(GetOwner()))
-		{
-			Plane->SetVisualBank(Snapshot.VisualBankDegrees);
-		}
-	}
-}
-
-void UArcadeFlightComponent::InterpolateBufferedState()
-{
-	if (SnapshotBuffer.IsEmpty())
-	{
-		return;
-	}
-
-	const AGameStateBase* GameState = GetWorld()->GetGameState();
-	const double ServerNow = GameState ? GameState->GetServerWorldTimeSeconds() : GetWorld()->GetTimeSeconds();
-	const double RenderTime = ServerNow - SnapshotInterpolationDelay;
-
-	while (SnapshotBuffer.Num() >= 3 && SnapshotBuffer[1].ServerTimeSeconds <= RenderTime)
-	{
-		SnapshotBuffer.RemoveAt(0, 1, EAllowShrinking::No);
-	}
-
-	FVector RenderLocation = SnapshotBuffer[0].Location;
-	FQuat RenderRotation = SnapshotBuffer[0].Rotation;
-	float RenderVisualBank = SnapshotBuffer[0].VisualBankDegrees;
-	float RenderBrakeAlpha = SnapshotBuffer[0].BrakeAlpha;
-	if (SnapshotBuffer.Num() >= 2)
-	{
-		const FBufferedFlightState& From = SnapshotBuffer[0];
-		const FBufferedFlightState& To = SnapshotBuffer[1];
-		const double Duration = To.ServerTimeSeconds - From.ServerTimeSeconds;
-		if (RenderTime <= To.ServerTimeSeconds && Duration > UE_SMALL_NUMBER)
-		{
-			const float Alpha = FMath::Clamp(static_cast<float>((RenderTime - From.ServerTimeSeconds) / Duration), 0.0f, 1.0f);
-			RenderLocation = FMath::Lerp(From.Location, To.Location, Alpha);
-			RenderRotation = FQuat::Slerp(From.Rotation, To.Rotation, Alpha).GetNormalized();
-			RenderVisualBank = FMath::Lerp(
-				From.VisualBankDegrees, To.VisualBankDegrees, Alpha);
-			RenderBrakeAlpha = FMath::Lerp(From.BrakeAlpha, To.BrakeAlpha, Alpha);
-		}
-		else if (RenderTime > To.ServerTimeSeconds)
-		{
-			const float Extrapolation = FMath::Min(static_cast<float>(RenderTime - To.ServerTimeSeconds), MaxExtrapolationTime);
-			RenderLocation = To.Location + To.Velocity * Extrapolation;
-			RenderRotation = To.Rotation;
-			RenderVisualBank = To.VisualBankDegrees;
-			RenderBrakeAlpha = To.BrakeAlpha;
-		}
-	}
-
-	GetOwner()->SetActorLocationAndRotation(RenderLocation, RenderRotation, false, nullptr,
-		ETeleportType::None);
-	if (AArcadeJetPawn* Plane = Cast<AArcadeJetPawn>(GetOwner()))
-	{
-		Plane->SetVisualBank(RenderVisualBank);
-	}
-	if (const APawn* OwnerPawn = Cast<APawn>(GetOwner());
-		!OwnerPawn || !OwnerPawn->IsLocallyControlled())
-	{
-		SmoothedBrake = RenderBrakeAlpha;
-	}
-	const FVector RenderForward = RenderRotation.GetForwardVector();
-	CurrentVelocity = SnapshotBuffer.Num() >= 2 ? SnapshotBuffer[1].Velocity : SnapshotBuffer[0].Velocity;
-	CurrentForwardSpeed = FVector::DotProduct(CurrentVelocity, RenderForward);
+			State.SmoothedSteering = FVector2D::ZeroVector;
+		}, "StraightManeuverExit");
 }
 
 void UArcadeFlightComponent::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
 {
 	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
-	DOREPLIFETIME(UArcadeFlightComponent, ServerState);
-	DOREPLIFETIME(UArcadeFlightComponent, HoverState);
-	DOREPLIFETIME(UArcadeFlightComponent, bBoundaryReturnActive);
 }
 
 void UArcadeFlightComponent::RotateAircraft(const float DeltaTime, const FJetFlightStats& Stats)
@@ -456,23 +1009,14 @@ void UArcadeFlightComponent::RotateAircraft(const float DeltaTime, const FJetFli
 		}
 		return;
 	}
-	FQuat ManeuverRotation = FQuat::Identity;
-	if (CachedQuickReversalComponent
-		&& CachedQuickReversalComponent->GetAuthoritativeFlightRotation(ManeuverRotation))
+	if (IsQuickReversalActive())
 	{
-		GetOwner()->SetActorRotation(ManeuverRotation);
+		GetOwner()->SetActorRotation(BuildQuickReversalRotation(GetMobilityProgress()));
 		return;
 	}
-	if (CachedBackwardDashComponent
-		&& CachedBackwardDashComponent->GetAuthoritativeFlightRotation(ManeuverRotation))
+	if (IsBackwardDashActive() || IsForwardDashActive())
 	{
-		GetOwner()->SetActorRotation(ManeuverRotation);
-		return;
-	}
-	if (CachedForwardDashComponent
-		&& CachedForwardDashComponent->GetAuthoritativeFlightRotation(ManeuverRotation))
-	{
-		GetOwner()->SetActorRotation(ManeuverRotation);
+		GetOwner()->SetActorRotation(MobilityInitialRotation);
 		return;
 	}
 	if (HoverState != EArcadeHoverState::Flying)
@@ -485,12 +1029,22 @@ void UArcadeFlightComponent::RotateAircraft(const float DeltaTime, const FJetFli
 			? Stats.HoverPitch
 			: FMath::FInterpTo(CurrentRotation.Pitch, TargetPitch, DeltaTime, RotationResponse);
 		const float NewYaw = CurrentRotation.Yaw;
-		GetOwner()->SetActorRotation(FRotator(NewPitch, NewYaw, 0.0f));
+		const FRotator ProposedRotation(NewPitch, NewYaw, 0.0f);
+		if (HoverState == EArcadeHoverState::Entering)
+		{
+			if (const AArcadeJetPawn* Plane = Cast<AArcadeJetPawn>(GetOwner());
+				Plane && Plane->WouldPlaneRotationCollide(ProposedRotation))
+			{
+				CancelHoverEntryFromCollision();
+				return;
+			}
+		}
+		GetOwner()->SetActorRotation(ProposedRotation);
 		if (HoverState == EArcadeHoverState::Leaving
 			&& FMath::Abs(NewPitch) <= ArcadeFlightTuning::HoverExitControlPitchTolerance)
 		{
 			GetOwner()->SetActorRotation(FRotator(0.0f, NewYaw, 0.0f));
-			SetAuthoritativeHoverState(EArcadeHoverState::Flying);
+			SetSimulationHoverState(EArcadeHoverState::Flying);
 		}
 		return;
 	}
@@ -573,21 +1127,16 @@ float UArcadeFlightComponent::GetCurrentTurnRateMultiplier() const
 
 void UArcadeFlightComponent::MoveAircraft(const float DeltaTime, const FJetFlightStats& Stats)
 {
-	FVector ManeuverVelocity = FVector::ZeroVector;
-	float ManeuverForwardSpeed = CurrentForwardSpeed;
 	const float MaximumStrafeSpeed = Stats.ForwardSpeed * Stats.StrafeSpeedMultiplier;
 	const FVector DesiredLateralVelocity = GetOwner()->GetActorRightVector()
 		* SmoothedStrafe * MaximumStrafeSpeed;
-	if (CachedForwardDashComponent
-		&& CachedForwardDashComponent->ConsumeAuthoritativeMovement(
-			Stats.ForwardSpeed, ManeuverVelocity, ManeuverForwardSpeed))
+	const auto ApplyManeuverVelocity = [this, DeltaTime](const FVector& Velocity)
 	{
-		CurrentForwardSpeed = ManeuverForwardSpeed;
-		CurrentVelocity = ManeuverVelocity;
-		const FVector RequestedMove = ManeuverVelocity * DeltaTime;
+		CurrentVelocity = Velocity;
+		const FVector RequestedMove = Velocity * DeltaTime;
 		if (AArcadeJetPawn* Plane = Cast<AArcadeJetPawn>(GetOwner()))
 		{
-			CurrentVelocity = Plane->MovePlaneWithCollision(RequestedMove, ManeuverVelocity);
+			CurrentVelocity = Plane->MovePlaneWithCollision(RequestedMove, Velocity);
 		}
 		else
 		{
@@ -596,59 +1145,79 @@ void UArcadeFlightComponent::MoveAircraft(const float DeltaTime, const FJetFligh
 		}
 		CurrentForwardSpeed = FVector::DotProduct(
 			CurrentVelocity, GetOwner()->GetActorForwardVector());
+	};
+
+	if (IsForwardDashActive())
+	{
+		const float AccelerationProgress = FMath::Clamp(
+			MobilityElapsed / ArcadeFlightTuning::ForwardDashAccelerationDuration,
+			0.0f, 1.0f);
+		const float Speed = FMath::Lerp(
+			MobilityInitialForwardSpeed,
+			Stats.ForwardSpeed * ArcadeFlightTuning::ForwardDashSpeedMultiplier,
+			FMath::SmoothStep(0.0f, 1.0f, AccelerationProgress));
+		ApplyManeuverVelocity(MobilityInitialRotation.Vector() * Speed);
+		if (MobilityElapsed >= ArcadeFlightTuning::ForwardDashDuration)
+		{
+			FinishMobilityAbility();
+		}
 		return;
 	}
-	if (CachedBackwardDashComponent
-		&& CachedBackwardDashComponent->ConsumeAuthoritativeMovement(
-			DeltaTime,
-			Stats.ForwardSpeed,
-			DesiredLateralVelocity,
-			ManeuverVelocity,
-			ManeuverForwardSpeed))
+	if (IsBackwardDashActive())
 	{
-		CurrentForwardSpeed = ManeuverForwardSpeed;
-		CurrentVelocity = ManeuverVelocity;
-
-		const FVector RequestedMove = ManeuverVelocity * DeltaTime;
-		if (AArcadeJetPawn* Plane = Cast<AArcadeJetPawn>(GetOwner()))
+		const float BackwardProgress = FMath::Clamp(
+			MobilityElapsed / ArcadeFlightTuning::BackwardTravelDuration, 0.0f, 1.0f);
+		const FVector PathOffset = -MobilityInitialRotation.Vector()
+			* ArcadeFlightTuning::BackwardTravelDistance
+			* FMath::SmoothStep(0.0f, 1.0f, BackwardProgress);
+		const FVector DashVelocity = DeltaTime > UE_SMALL_NUMBER
+			? (PathOffset - MobilityPreviousPathOffset) / DeltaTime
+			: FVector::ZeroVector;
+		MobilityPreviousPathOffset = PathOffset;
+		MobilityLateralVelocity = FMath::VInterpTo(
+			MobilityLateralVelocity, DesiredLateralVelocity, DeltaTime,
+			ArcadeFlightTuning::BackwardLateralResponse);
+		const float RecoveryProgress = FMath::Clamp(
+			(MobilityElapsed - ArcadeFlightTuning::BackwardTravelDuration)
+			/ ArcadeFlightTuning::BackwardRecoveryDuration, 0.0f, 1.0f);
+		const float RecoverySpeed = Stats.ForwardSpeed
+			* FMath::SmoothStep(0.0f, 1.0f, RecoveryProgress);
+		ApplyManeuverVelocity(DashVelocity
+			+ MobilityInitialRotation.Vector() * RecoverySpeed
+			+ MobilityLateralVelocity);
+		if (MobilityElapsed >= ArcadeFlightTuning::BackwardDuration)
 		{
-			CurrentVelocity = Plane->MovePlaneWithCollision(RequestedMove, ManeuverVelocity);
+			FinishMobilityAbility();
 		}
-		else
-		{
-			GetOwner()->AddActorWorldOffset(
-				RequestedMove, false, nullptr, ETeleportType::None);
-		}
-		CurrentForwardSpeed = FVector::DotProduct(
-			CurrentVelocity, GetOwner()->GetActorForwardVector());
 		return;
 	}
-	if (CachedQuickReversalComponent
-		&& CachedQuickReversalComponent->ConsumeAuthoritativeMovement(
-			DeltaTime,
-			Stats.ForwardSpeed,
-			Stats.ForwardSpeed * Stats.BoostSpeedMultiplier,
-			DesiredLateralVelocity,
-			ManeuverVelocity,
-			ManeuverForwardSpeed))
+	if (IsQuickReversalActive())
 	{
-		// Lateral input remains available, but the skill owns all longitudinal
-		// deceleration and thrust until its inertial reversal has completed.
-		CurrentForwardSpeed = ManeuverForwardSpeed;
-		CurrentVelocity = ManeuverVelocity;
-
-		const FVector RequestedMove = ManeuverVelocity * DeltaTime;
-		if (AArcadeJetPawn* Plane = Cast<AArcadeJetPawn>(GetOwner()))
+		const float Progress = GetMobilityProgress();
+		const float CoastProgress = FMath::SmoothStep(
+			0.0f, ArcadeFlightTuning::QuickCoastEnd, Progress);
+		const float ThrustProgress = FMath::SmoothStep(
+			ArcadeFlightTuning::QuickThrustStart,
+			ArcadeFlightTuning::QuickThrustFull, Progress);
+		MobilityLateralVelocity = FMath::VInterpTo(
+			MobilityLateralVelocity, DesiredLateralVelocity, DeltaTime,
+			ArcadeFlightTuning::QuickLateralResponse);
+		const FVector ArcOffset = BuildQuickReversalArcOffset(Progress);
+		const FVector ArcVelocity = DeltaTime > UE_SMALL_NUMBER
+			? (ArcOffset - MobilityPreviousPathOffset) / DeltaTime
+			: FVector::ZeroVector;
+		MobilityPreviousPathOffset = ArcOffset;
+		const FVector ExitDirection = BuildQuickReversalRotation(1.0f).GetForwardVector();
+		const float TargetSpeed = FMath::Max(
+			Stats.ForwardSpeed, Stats.ForwardSpeed * Stats.BoostSpeedMultiplier);
+		ApplyManeuverVelocity(MobilityInitialForwardVelocity * (1.0f - CoastProgress)
+			+ ArcVelocity
+			+ ExitDirection * TargetSpeed * ThrustProgress
+			+ MobilityLateralVelocity);
+		if (Progress >= 1.0f)
 		{
-			CurrentVelocity = Plane->MovePlaneWithCollision(RequestedMove, ManeuverVelocity);
+			FinishMobilityAbility();
 		}
-		else
-		{
-			GetOwner()->AddActorWorldOffset(
-				RequestedMove, false, nullptr, ETeleportType::None);
-		}
-		CurrentForwardSpeed = FVector::DotProduct(
-			CurrentVelocity, GetOwner()->GetActorForwardVector());
 		return;
 	}
 
@@ -659,7 +1228,7 @@ void UArcadeFlightComponent::MoveAircraft(const float DeltaTime, const FJetFligh
 		if (CurrentForwardSpeed <= 5.0f)
 		{
 			CurrentForwardSpeed = 0.0f;
-			SetAuthoritativeHoverState(EArcadeHoverState::Hovering);
+			SetSimulationHoverState(EArcadeHoverState::Hovering);
 		}
 	}
 	else if (HoverState == EArcadeHoverState::Hovering)
@@ -674,7 +1243,7 @@ void UArcadeFlightComponent::MoveAircraft(const float DeltaTime, const FJetFligh
 	}
 	else
 	{
-	const float BoostAlpha = CachedBoostComponent ? CachedBoostComponent->GetBoostAlpha() : 0.0f;
+	const float BoostAlpha = CurrentBoostAlpha;
 	const float MinimumSpeed = FMath::Min(Stats.MinForwardSpeed, Stats.ForwardSpeed);
 	const float BrakedSpeed = FMath::Lerp(Stats.ForwardSpeed, MinimumSpeed, SmoothedBrake);
 	const float BoostedSpeed = Stats.ForwardSpeed * Stats.BoostSpeedMultiplier;
@@ -702,8 +1271,7 @@ void UArcadeFlightComponent::MoveAircraft(const float DeltaTime, const FJetFligh
 			1.0f, Stats.MaxDiveResponseMultiplier, DiveAmount);
 	}
 
-	const float RollSpeedMultiplier = CachedEvasiveRollComponent
-		&& CachedEvasiveRollComponent->IsRolling() ? (2.0f / 3.0f) : 1.0f;
+	const float RollSpeedMultiplier = bEvasiveRollActive ? (2.0f / 3.0f) : 1.0f;
 	const float TargetForwardSpeed = FMath::Max(
 		MinimumSpeed, PlayerTargetSpeed * DirectionSpeedMultiplier * RollSpeedMultiplier);
 	CurrentForwardSpeed = FMath::FInterpTo(CurrentForwardSpeed, TargetForwardSpeed, DeltaTime,

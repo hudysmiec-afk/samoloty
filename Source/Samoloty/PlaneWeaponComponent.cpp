@@ -34,6 +34,10 @@ void UPlaneWeaponComponent::SetWeaponEquipped(const bool bEquipped)
 	OnWeaponEquippedChanged();
 }
 
+void UPlaneWeaponComponent::StartEquipCooldown()
+{
+}
+
 bool UPlaneWeaponComponent::GetCooldownStatus(float& OutRemainingSeconds,
 	float& OutDurationSeconds) const
 {

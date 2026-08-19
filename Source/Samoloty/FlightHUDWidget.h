@@ -6,6 +6,8 @@
 
 class UCanvasPanel;
 class UCanvasPanelSlot;
+class UBorder;
+class UHorizontalBox;
 class UImage;
 class UProgressBar;
 class UTextBlock;
@@ -56,8 +58,13 @@ public:
 		float CurrentBoost, float MaxBoost, FName GunName,
 		float GunCooldownRemaining, float GunCooldownDuration,
 		FName MissileName, float MissileCooldownRemaining,
-		float MissileCooldownDuration);
+		float MissileCooldownDuration, float SpeedCentimetersPerSecond);
 	void SetBoundaryWarning(float WarningAlpha, bool bAutomaticReturn);
+	void SetAbilityCooldowns(float QuickReversalRemaining,
+		float BackwardDashRemaining, float ForwardDashRemaining,
+		float BlinkRemaining, float EvasiveRollRemaining);
+	void SetPerformanceStats(bool bShowFPS, float FPS, bool bShowPing,
+		float PingMilliseconds);
 
 protected:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Flight HUD|Textures")
@@ -97,13 +104,9 @@ protected:
 		meta=(ClampMin="1"))
 	FVector2D CrosshairSize = FVector2D(376.0f, 256.0f);
 
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Flight HUD|Layout",
-		meta=(ClampMin="1"))
-	FVector2D LockMarkerSize = FVector2D(164.0f, 112.0f);
-
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Flight HUD|Targeting|Layout",
 		meta=(ClampMin="1"))
-	FVector2D SelectedTargetMarkerSize = FVector2D(72.0f, 72.0f);
+	FVector2D WorldTargetMarkerSize = FVector2D(72.0f, 72.0f);
 
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Flight HUD|Targeting|Layout",
 		meta=(ClampMin="1"))
@@ -211,6 +214,9 @@ private:
 	TObjectPtr<UTextBlock> HealthText;
 
 	UPROPERTY(Transient)
+	TObjectPtr<UTextBlock> SpeedText;
+
+	UPROPERTY(Transient)
 	TObjectPtr<UProgressBar> BoostBar;
 
 	UPROPERTY(Transient)
@@ -230,6 +236,18 @@ private:
 
 	UPROPERTY(Transient)
 	TObjectPtr<UTextBlock> BoundaryWarningText;
+
+	UPROPERTY(Transient)
+	TObjectPtr<UTextBlock> PerformanceStatsText;
+
+	UPROPERTY(Transient)
+	TObjectPtr<UHorizontalBox> AbilityCooldownContainer;
+
+	UPROPERTY(Transient)
+	TArray<TObjectPtr<UBorder>> AbilityCooldownBorders;
+
+	UPROPERTY(Transient)
+	TArray<TObjectPtr<UTextBlock>> AbilityCooldownTexts;
 
 	UPROPERTY(Transient)
 	TObjectPtr<UImage> RadarSelectedImage;

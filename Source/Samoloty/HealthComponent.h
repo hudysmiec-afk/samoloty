@@ -6,6 +6,8 @@
 
 class UDamageType;
 class UJetStatsComponent;
+class UNiagaraSystem;
+class USoundBase;
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FHealthChangedSignature, float, CurrentHealth, float, MaxHealth);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE(FHealthDepletedSignature);
@@ -46,6 +48,20 @@ public:
 	UPROPERTY(BlueprintAssignable, Category="Plane|Health")
 	FDamageDealtSignature OnDamageDealt;
 
+	/** One-shot cosmetic spawned for every client immediately before this actor is destroyed. */
+	UPROPERTY(EditAnywhere, Category="Plane|Health|Death")
+	TObjectPtr<UNiagaraSystem> DeathEffect;
+
+	UPROPERTY(EditAnywhere, Category="Plane|Health|Death", meta=(ClampMin="0.01"))
+	float DeathEffectScale = 1.0f;
+
+	/** One-shot spatial sound played for every client at the destruction location. */
+	UPROPERTY(EditAnywhere, Category="Plane|Health|Death")
+	TObjectPtr<USoundBase> DeathSound;
+
+	UPROPERTY(EditAnywhere, Category="Plane|Health|Death", meta=(ClampMin="0.0"))
+	float DeathSoundVolume = 1.0f;
+
 private:
 	UFUNCTION()
 	void HandleAnyDamage(AActor* DamagedActor, float Damage, const UDamageType* DamageType,
@@ -63,6 +79,9 @@ private:
 	UFUNCTION(Client, Reliable)
 	void ClientNotifyDamageDealt(
 		AActor* DamagedActor, float Damage, FVector_NetQuantize WorldLocation);
+
+	UFUNCTION(NetMulticast, Reliable)
+	void MulticastPlayDeathEffect(FVector_NetQuantize Location, FRotator Rotation);
 
 	const UJetStatsComponent* GetStatsComponent() const;
 

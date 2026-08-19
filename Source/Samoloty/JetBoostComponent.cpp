@@ -8,13 +8,14 @@
 #include "Engine/Engine.h"
 #include "GameFramework/Actor.h"
 #include "GameFramework/Pawn.h"
-#include "Net/UnrealNetwork.h"
 
 UJetBoostComponent::UJetBoostComponent()
 {
 	PrimaryComponentTick.bCanEverTick = true;
 	PrimaryComponentTick.TickGroup = TG_PrePhysics;
-	SetIsReplicatedByDefault(true);
+	// Gameplay state lives in the rewindable flight simulation. This component
+	// is now only an input/presentation facade and does not need its own channel.
+	SetIsReplicatedByDefault(false);
 }
 
 void UJetBoostComponent::BeginPlay()
@@ -30,6 +31,8 @@ void UJetBoostComponent::BeginPlay()
 		? GetOwner()->FindComponentByClass<UBackwardDashComponent>() : nullptr;
 	CachedForwardDashComponent = GetOwner()
 		? GetOwner()->FindComponentByClass<UForwardDashComponent>() : nullptr;
+	CachedFlightComponent = GetOwner()
+		? GetOwner()->FindComponentByClass<UArcadeFlightComponent>() : nullptr;
 }
 
 void UJetBoostComponent::TickComponent(const float DeltaTime, const ELevelTick TickType,
@@ -43,43 +46,12 @@ void UJetBoostComponent::TickComponent(const float DeltaTime, const ELevelTick T
 	}
 
 	const FJetFlightStats& Values = Stats->GetFlightStats();
-	if (GetOwner()->HasAuthority())
+	if (CachedFlightComponent)
 	{
-		const bool bMobilityOverride = CachedQuickReversalComponent
-			&& CachedQuickReversalComponent->IsReversalActive()
-			|| CachedBackwardDashComponent
-			&& CachedBackwardDashComponent->IsDashActive()
-			|| CachedForwardDashComponent
-			&& CachedForwardDashComponent->IsDashActive();
-		const bool bCanBoost = !bMobilityOverride
-			&& bLocalBoostRequested && CurrentEnergy > KINDA_SMALL_NUMBER;
-		SetAuthoritativeBoostState(bCanBoost);
-
-		if (bIsBoosting)
-		{
-			CurrentEnergy = FMath::Max(0.0f, CurrentEnergy - Values.BoostEnergyDrainPerSecond * DeltaTime);
-			TimeSinceBoostStopped = 0.0f;
-			if (CurrentEnergy <= KINDA_SMALL_NUMBER)
-			{
-				SetAuthoritativeBoostState(false);
-			}
-		}
-		else if (!CachedForwardDashComponent
-			|| !CachedForwardDashComponent->IsDashActive())
-		{
-			TimeSinceBoostStopped += DeltaTime;
-			if (TimeSinceBoostStopped >= Values.BoostRegenDelay)
-			{
-				CurrentEnergy = FMath::Min(Values.MaxBoostEnergy,
-					CurrentEnergy + Values.BoostEnergyRegenPerSecond * DeltaTime);
-			}
-		}
+		bIsBoosting = CachedFlightComponent->IsPredictedBoosting();
+		CurrentEnergy = CachedFlightComponent->GetPredictedBoostEnergy();
+		BoostAlpha = CachedFlightComponent->GetPredictedBoostAlpha();
 	}
-
-	// The server is the only source of boost truth. Clients smooth the replicated
-	// state but never keep boosting only because Space is still held locally.
-	BoostAlpha = FMath::FInterpTo(BoostAlpha, bIsBoosting ? 1.0f : 0.0f,
-		DeltaTime, Values.BoostResponseSpeed);
 	UpdatePresentationBoostState();
 	DrawBoostDebug(Values.MaxBoostEnergy);
 }
@@ -187,43 +159,17 @@ void UJetBoostComponent::DrawBoostDebug(const float MaxEnergy) const
 void UJetBoostComponent::SetBoostRequested(const bool bRequested)
 {
 	bLocalBoostRequested = bRequested;
-	if (GetOwner()->HasAuthority())
+	if (!CachedFlightComponent && GetOwner())
 	{
-		SetAuthoritativeBoostState(bRequested && CurrentEnergy > KINDA_SMALL_NUMBER);
+		CachedFlightComponent = GetOwner()->FindComponentByClass<UArcadeFlightComponent>();
 	}
-	else
+	if (CachedFlightComponent)
 	{
-		ServerSetBoostRequested(bRequested);
+		CachedFlightComponent->SetLocalBoostRequested(bRequested);
 	}
-}
-
-void UJetBoostComponent::ServerSetBoostRequested_Implementation(const bool bRequested)
-{
-	bLocalBoostRequested = bRequested;
-}
-
-void UJetBoostComponent::SetAuthoritativeBoostState(const bool bNewBoosting)
-{
-	if (bIsBoosting != bNewBoosting)
-	{
-		bIsBoosting = bNewBoosting;
-		UpdatePresentationBoostState();
-	}
-}
-
-void UJetBoostComponent::OnRep_IsBoosting()
-{
-	UpdatePresentationBoostState();
 }
 
 const UJetStatsComponent* UJetBoostComponent::GetStatsComponent() const
 {
 	return GetOwner() ? GetOwner()->FindComponentByClass<UJetStatsComponent>() : nullptr;
-}
-
-void UJetBoostComponent::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
-{
-	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
-	DOREPLIFETIME(UJetBoostComponent, bIsBoosting);
-	DOREPLIFETIME(UJetBoostComponent, CurrentEnergy);
 }
