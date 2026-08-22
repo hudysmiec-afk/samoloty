@@ -119,12 +119,17 @@ private:
 	uint8 ServerMuzzleIndex = 0;
 	uint16 LocalShotSequence = 0;
 	uint16 ServerAiShotSequence = 0;
+	uint16 LastAcceptedClientShotSequence = 0;
 	TMap<uint16, FCombatImpactEvent> PredictedImpacts;
 	double NextLocalShotTime = 0.0;
 	double NextServerShotTime = 0.0;
+	double LastAcceptedClientFireServerTime = 0.0;
 	UPROPERTY(Replicated)
 	int32 ServerShotsFired = 0;
 
 	UPROPERTY(Replicated)
 	int32 ServerHits = 0;
+
+	UPROPERTY(Replicated)
+	int32 ServerRejectedShots = 0;
 };

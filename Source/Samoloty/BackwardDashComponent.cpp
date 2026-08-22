@@ -4,6 +4,7 @@
 #include "HealthComponent.h"
 #include "ForwardDashComponent.h"
 #include "QuickReversalComponent.h"
+#include "Components/AudioComponent.h"
 #include "GameFramework/Actor.h"
 #include "GameFramework/GameStateBase.h"
 #include "GameFramework/Pawn.h"
@@ -144,11 +145,21 @@ void UBackwardDashComponent::MulticastPlayBackwardDashSound_Implementation()
 
 void UBackwardDashComponent::PlayPredictedActivationEffect()
 {
+	StopActivationEffect();
 	if (BackwardDashSound && GetNetMode() != NM_DedicatedServer && GetOwner()
 		&& GetOwner()->GetRootComponent())
 	{
-		UGameplayStatics::SpawnSoundAttached(
+		ActiveDashAudio = UGameplayStatics::SpawnSoundAttached(
 			BackwardDashSound, GetOwner()->GetRootComponent());
+	}
+}
+
+void UBackwardDashComponent::StopActivationEffect()
+{
+	if (ActiveDashAudio)
+	{
+		ActiveDashAudio->Stop();
+		ActiveDashAudio = nullptr;
 	}
 }
 

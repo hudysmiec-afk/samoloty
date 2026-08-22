@@ -8,6 +8,7 @@ class UArcadeFlightComponent;
 class UBackwardDashComponent;
 class UHealthComponent;
 class UQuickReversalComponent;
+class UAudioComponent;
 class USoundBase;
 class UCameraShakeBase;
 
@@ -62,6 +63,7 @@ public:
 
 	float GetMaximumSpeed(float NormalForwardSpeed) const;
 	void PlayPredictedActivationEffect();
+	void StopActivationEffect();
 
 private:
 	UFUNCTION()
@@ -93,6 +95,9 @@ private:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Plane|Mobility|Forward Dash|Effects",
 		meta=(AllowPrivateAccess="true"))
 	TObjectPtr<USoundBase> ForwardDashSound;
+
+	UPROPERTY(Transient)
+	TObjectPtr<UAudioComponent> ActiveDashAudio;
 
 	/** Local screen shake started for the player using the forward dash. */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Plane|Mobility|Forward Dash|Effects",

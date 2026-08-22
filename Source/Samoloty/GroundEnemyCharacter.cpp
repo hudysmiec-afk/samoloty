@@ -52,6 +52,12 @@ AGroundEnemyCharacter::AGroundEnemyCharacter()
 	Movement->MaxWalkSpeed = 600.0f;
 	Movement->bOrientRotationToMovement = false;
 	Movement->RotationRate = FRotator(0.0f, 360.0f, 0.0f);
+	// Ground enemies often converge on the same aircraft. RVO gives each
+	// Character a local separation velocity instead of letting capsules form a
+	// mutually blocked ring while every AI keeps requesting forward movement.
+	Movement->bUseRVOAvoidance = true;
+	Movement->AvoidanceConsiderationRadius = 500.0f;
+	Movement->AvoidanceWeight = 0.75f;
 
 	JetStats = CreateDefaultSubobject<UJetStatsComponent>(TEXT("JetStats"));
 	FJetCombatStats CombatStats;

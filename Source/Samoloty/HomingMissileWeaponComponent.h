@@ -99,4 +99,6 @@ private:
 	TWeakObjectPtr<AActor> LastTargetSentToServer;
 	bool bLocalFireHeld = false;
 	bool bServerFireHeld = false;
+	/** AI selects targets independently of the player-facing lock cone. */
+	bool bRequestedTargetFromAI = false;
 };

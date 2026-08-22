@@ -4,6 +4,7 @@
 #include "BackwardDashComponent.h"
 #include "EvasiveRollComponent.h"
 #include "ForwardDashComponent.h"
+#include "Components/AudioComponent.h"
 #include "HealthComponent.h"
 #include "GameFramework/Actor.h"
 #include "GameFramework/GameStateBase.h"
@@ -176,11 +177,21 @@ void UQuickReversalComponent::MulticastPlayQuickReversalSound_Implementation()
 
 void UQuickReversalComponent::PlayPredictedActivationEffect()
 {
+	StopActivationEffect();
 	if (QuickReversalSound && GetNetMode() != NM_DedicatedServer && GetOwner()
 		&& GetOwner()->GetRootComponent())
 	{
-		UGameplayStatics::SpawnSoundAttached(
+		ActiveReversalAudio = UGameplayStatics::SpawnSoundAttached(
 			QuickReversalSound, GetOwner()->GetRootComponent());
+	}
+}
+
+void UQuickReversalComponent::StopActivationEffect()
+{
+	if (ActiveReversalAudio)
+	{
+		ActiveReversalAudio->Stop();
+		ActiveReversalAudio = nullptr;
 	}
 }
 

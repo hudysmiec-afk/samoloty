@@ -8,6 +8,7 @@ class UArcadeFlightComponent;
 class UHealthComponent;
 class UForwardDashComponent;
 class UQuickReversalComponent;
+class UAudioComponent;
 class USoundBase;
 
 USTRUCT()
@@ -61,6 +62,7 @@ public:
 
 	float GetManeuverProgress() const;
 	void PlayPredictedActivationEffect();
+	void StopActivationEffect();
 
 private:
 	UFUNCTION(Server, Reliable)
@@ -99,6 +101,9 @@ private:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Plane|Mobility|Backward Dash|Effects",
 		meta=(AllowPrivateAccess="true"))
 	TObjectPtr<USoundBase> BackwardDashSound;
+
+	UPROPERTY(Transient)
+	TObjectPtr<UAudioComponent> ActiveDashAudio;
 
 	double NextAllowedServerTime = 0.0;
 	double LocalNextAllowedTime = 0.0;

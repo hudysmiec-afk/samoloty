@@ -46,6 +46,7 @@ void UHomingMissileWeaponComponent::SetFireHeld(const bool bHeld)
 		return;
 	}
 	bLocalFireHeld = bHeld;
+	bRequestedTargetFromAI = false;
 	AActor* LocalTarget = nullptr;
 	if (const UMissileTargetingComponent* Targeting = GetTargetingComponent())
 	{
@@ -81,6 +82,7 @@ void UHomingMissileWeaponComponent::SetAITargetAndFire(AActor* TargetActor, cons
 	{
 		return;
 	}
+	bRequestedTargetFromAI = bHeld && IsValid(TargetActor);
 	SetAuthoritativeFireHeld(bHeld, bHeld ? TargetActor : nullptr);
 }
 
@@ -91,6 +93,7 @@ void UHomingMissileWeaponComponent::ServerSetFireHeld_Implementation(const bool 
 	{
 		return;
 	}
+	bRequestedTargetFromAI = false;
 	SetAuthoritativeFireHeld(bHeld, RequestedTargetActor);
 }
 
@@ -98,6 +101,7 @@ void UHomingMissileWeaponComponent::ServerUpdateRequestedTarget_Implementation(A
 {
 	if (IsWeaponEquipped())
 	{
+		bRequestedTargetFromAI = false;
 		RequestedTarget = RequestedTargetActor;
 	}
 }
@@ -277,7 +281,23 @@ void UHomingMissileWeaponComponent::FireSalvo()
 	int32 RightIndex = 0;
 	// A target belongs to one salvo, not to the entire trigger sequence. Already
 	// launched missiles retain their assigned target; later salvos use the current lock.
-	SequenceTarget = ValidateRequestedTarget(RequestedTarget.Get());
+	// Server-owned AI already chose its combat target. Keep health and range
+	// validation, but do not apply the player camera/forward lock cone: a ground
+	// unit cannot pitch its actor forward vector toward an aircraft overhead.
+	AActor* CandidateTarget = RequestedTarget.Get();
+	SequenceTarget = ValidateRequestedTarget(CandidateTarget);
+	if (!SequenceTarget.IsValid() && bRequestedTargetFromAI && IsValid(CandidateTarget))
+	{
+		const UHealthComponent* TargetHealth = CandidateTarget->FindComponentByClass<UHealthComponent>();
+		const FHomingMissileStats& HomingStats = StatsComponent->GetHomingMissileStats();
+		const bool bWithinAIRange = FVector::DistSquared(
+			GetOwner()->GetActorLocation(), CandidateTarget->GetActorLocation())
+			<= FMath::Square(HomingStats.LockRange * 1.15f);
+		if (TargetHealth && !TargetHealth->IsDead() && bWithinAIRange)
+		{
+			SequenceTarget = CandidateTarget;
+		}
+	}
 	AActor* SalvoTarget = GetLiveSequenceTarget();
 	for (int32 Index = 0; Index < MissileCount; ++Index)
 	{

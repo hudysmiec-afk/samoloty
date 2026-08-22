@@ -155,6 +155,11 @@ FVector UAircraftCollisionComponent::MoveOwner(const FVector& RequestedMove,
 		Owner->AddActorWorldOffset(RequestedMove, false, nullptr, ETeleportType::None);
 		return RequestedVelocity;
 	}
+	if (UArcadeFlightComponent* Flight =
+		Owner->FindComponentByClass<UArcadeFlightComponent>())
+	{
+		Flight->CancelMobilityAbilityFromCollision();
+	}
 
 	const float SafeMoveAlpha = FMath::Clamp(Hit.Time - 0.001f, 0.0f, 1.0f);
 	Owner->AddActorWorldOffset(RequestedMove * SafeMoveAlpha,

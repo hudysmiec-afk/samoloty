@@ -139,6 +139,9 @@ Pawnie.
 
 Dokładne założenia znajdują się w:
 
+- [`Docs/PROJECT_STATUS.md`](Docs/PROJECT_STATUS.md) — aktualny przekrojowy stan projektu
+- [`Docs/DECISIONS.md`](Docs/DECISIONS.md) — trwałe decyzje architektoniczne i ich powody
+- [`Docs/ROADMAP.md`](Docs/ROADMAP.md) — najbliższe zadania, problemy i dalsze plany
 - [`Docs/RocketBarrageDesign.md`](Docs/RocketBarrageDesign.md)
 - [`Docs/RifleGunDesign.md`](Docs/RifleGunDesign.md)
 - [`Docs/FlightAndAudio.md`](Docs/FlightAndAudio.md)

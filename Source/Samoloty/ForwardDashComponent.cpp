@@ -5,6 +5,7 @@
 #include "HealthComponent.h"
 #include "QuickReversalComponent.h"
 #include "Camera/PlayerCameraManager.h"
+#include "Components/AudioComponent.h"
 #include "GameFramework/Actor.h"
 #include "GameFramework/GameStateBase.h"
 #include "GameFramework/Pawn.h"
@@ -134,13 +135,14 @@ void UForwardDashComponent::MulticastPlayForwardDashSound_Implementation()
 
 void UForwardDashComponent::PlayPredictedActivationEffect()
 {
+	StopActivationEffect();
 	if (GetNetMode() == NM_DedicatedServer || !GetOwner())
 	{
 		return;
 	}
 	if (ForwardDashSound && GetOwner()->GetRootComponent())
 	{
-		UGameplayStatics::SpawnSoundAttached(
+		ActiveDashAudio = UGameplayStatics::SpawnSoundAttached(
 			ForwardDashSound, GetOwner()->GetRootComponent());
 	}
 	if (ForwardDashCameraShake && ForwardDashCameraShakeScale > 0.0f)
@@ -153,6 +155,15 @@ void UForwardDashComponent::PlayPredictedActivationEffect()
 			PlayerController->PlayerCameraManager->StartCameraShake(
 				ForwardDashCameraShake, ForwardDashCameraShakeScale);
 		}
+	}
+}
+
+void UForwardDashComponent::StopActivationEffect()
+{
+	if (ActiveDashAudio)
+	{
+		ActiveDashAudio->Stop();
+		ActiveDashAudio = nullptr;
 	}
 }
 

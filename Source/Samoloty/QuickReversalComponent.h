@@ -9,6 +9,7 @@ class UBackwardDashComponent;
 class UEvasiveRollComponent;
 class UForwardDashComponent;
 class UHealthComponent;
+class UAudioComponent;
 class USoundBase;
 
 UENUM(BlueprintType)
@@ -103,6 +104,7 @@ public:
 	/** Restores regular turn/strafe bank after the nose-up part is complete. */
 	float GetFlightBankBlendAlpha() const;
 	void PlayPredictedActivationEffect();
+	void StopActivationEffect();
 
 private:
 	UFUNCTION(Server, Reliable)
@@ -146,6 +148,9 @@ private:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Plane|Mobility|Quick Reversal|Effects",
 		meta=(AllowPrivateAccess="true"))
 	TObjectPtr<USoundBase> QuickReversalSound;
+
+	UPROPERTY(Transient)
+	TObjectPtr<UAudioComponent> ActiveReversalAudio;
 
 	double NextAllowedServerTime = 0.0;
 	double LocalNextAllowedTime = 0.0;

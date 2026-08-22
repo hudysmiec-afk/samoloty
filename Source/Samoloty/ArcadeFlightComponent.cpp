@@ -482,6 +482,39 @@ void UArcadeFlightComponent::CancelHoverEntryFromCollision()
 	}
 }
 
+void UArcadeFlightComponent::CancelMobilityAbilityFromCollision()
+{
+	switch (ActiveMobilityAbility)
+	{
+	case EPlaneAbilityType::QuickReversal:
+		if (UQuickReversalComponent* Reversal =
+			GetOwner()->FindComponentByClass<UQuickReversalComponent>())
+		{
+			Reversal->StopActivationEffect();
+		}
+		FinishMobilityAbility();
+		break;
+	case EPlaneAbilityType::BackwardDash:
+		if (UBackwardDashComponent* BackwardDash =
+			GetOwner()->FindComponentByClass<UBackwardDashComponent>())
+		{
+			BackwardDash->StopActivationEffect();
+		}
+		FinishMobilityAbility();
+		break;
+	case EPlaneAbilityType::ForwardDash:
+		if (UForwardDashComponent* ForwardDash =
+			GetOwner()->FindComponentByClass<UForwardDashComponent>())
+		{
+			ForwardDash->StopActivationEffect();
+		}
+		FinishMobilityAbility();
+		break;
+	default:
+		break;
+	}
+}
+
 void UArcadeFlightComponent::SetSimulationHoverState(const EArcadeHoverState NewState)
 {
 	if (HoverState == NewState)
@@ -1210,7 +1243,8 @@ void UArcadeFlightComponent::MoveAircraft(const float DeltaTime, const FJetFligh
 		const FVector ExitDirection = BuildQuickReversalRotation(1.0f).GetForwardVector();
 		const float TargetSpeed = FMath::Max(
 			Stats.ForwardSpeed, Stats.ForwardSpeed * Stats.BoostSpeedMultiplier);
-		ApplyManeuverVelocity(MobilityInitialForwardVelocity * (1.0f - CoastProgress)
+		ApplyManeuverVelocity(
+			MobilityInitialForwardVelocity * (1.0f - CoastProgress)
 			+ ArcVelocity
 			+ ExitDirection * TargetSpeed * ThrustProgress
 			+ MobilityLateralVelocity);

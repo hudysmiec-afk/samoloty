@@ -121,6 +121,8 @@ public:
 
 	/** Cancels an unsafe entry when the movement capsule touches geometry. */
 	void CancelHoverEntryFromCollision();
+	/** Immediately ends a collision-sensitive mobility maneuver. */
+	void CancelMobilityAbilityFromCollision();
 
 	UFUNCTION(BlueprintPure, Category="Plane|Flight|Boundary")
 	float GetBoundaryWarningAlpha() const { return BoundaryWarningAlpha; }

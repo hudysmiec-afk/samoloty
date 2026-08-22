@@ -268,12 +268,29 @@ void URifleGunComponent::HandleServerFireShot(
 		return;
 	}
 	const double Now = GetWorld()->GetTimeSeconds();
-	if (Now + 0.002 < NextServerShotTime)
+	const double ShotInterval =
+		1.0 / FMath::Max(0.1f, Stats->GetRifleGunStats().ShotsPerSecond);
+	const bool bHasAcceptedClientShot = LastAcceptedClientFireServerTime > 0.0;
+	const bool bSequenceIsNewer = !bHasAcceptedClientShot
+		|| static_cast<int16>(Sequence - LastAcceptedClientShotSequence) > 0;
+	// Validate the cadence in the client's synchronized server-time domain. At
+	// high ping/jitter several unreliable RPCs may arrive in one server frame;
+	// arrival-time throttling incorrectly discarded every shot after the first.
+	// Network delay must not invalidate the shot itself. The requested rewind is
+	// independently clamped below, so a late packet never receives more than the
+	// configured compensation window.
+	const bool bClientTimeIsSane = ClientFireServerTime <= Now + 0.050;
+	const bool bCadenceIsValid = !bHasAcceptedClientShot
+		|| ClientFireServerTime + 0.002 >= LastAcceptedClientFireServerTime + ShotInterval;
+	const bool bEquipCooldownComplete = Now + 0.002 >= NextServerShotTime;
+	if (!bSequenceIsNewer || !bClientTimeIsSane || !bCadenceIsValid
+		|| !bEquipCooldownComplete)
 	{
+		++ServerRejectedShots;
 		return;
 	}
-	NextServerShotTime = Now
-		+ 1.0 / FMath::Max(0.1f, Stats->GetRifleGunStats().ShotsPerSecond);
+	LastAcceptedClientShotSequence = Sequence;
+	LastAcceptedClientFireServerTime = ClientFireServerTime;
 	const FVector OwnerLocation = GetOwner()->GetActorLocation();
 	ServerCameraOrigin = OwnerLocation + (CameraOrigin - OwnerLocation)
 		.GetClampedToMaxSize(MaxCameraOriginDistance);
@@ -447,6 +464,7 @@ void URifleGunComponent::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& O
 	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
 	DOREPLIFETIME_CONDITION(URifleGunComponent, ServerShotsFired, COND_OwnerOnly);
 	DOREPLIFETIME_CONDITION(URifleGunComponent, ServerHits, COND_OwnerOnly);
+	DOREPLIFETIME_CONDITION(URifleGunComponent, ServerRejectedShots, COND_OwnerOnly);
 }
 
 void URifleGunComponent::PlayShotVisual(const FVector& Start,
@@ -535,8 +553,10 @@ void URifleGunComponent::DrawRifleDebug() const
 	{
 		return;
 	}
-	const FString Message = FString::Printf(TEXT("RIFLE: %s | Server shots: %d | hits: %d"),
-		bLocalFireHeld ? TEXT("FIRING") : TEXT("READY"), ServerShotsFired, ServerHits);
+	const FString Message = FString::Printf(
+		TEXT("RIFLE: %s | Server shots: %d | hits: %d | rejected: %d"),
+		bLocalFireHeld ? TEXT("FIRING") : TEXT("READY"), ServerShotsFired, ServerHits,
+		ServerRejectedShots);
 	GEngine->AddOnScreenDebugMessage(static_cast<uint64>(GetUniqueID()), 0.0f, FColor::Cyan, Message);
 }
 bool URifleGunComponent::GetCooldownStatus(float& OutRemainingSeconds,

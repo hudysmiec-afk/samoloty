@@ -21,8 +21,8 @@ public:
 
 	/**
 	 * Estimates the server timestamp represented by the remote aircraft currently
-	 * visible to this client. Compensation is deliberately capped so excessive
-	 * latency disadvantages the shooter instead of granting a larger rewind window.
+	 * visible to this client. The cap must cover the normal interpolation delay plus
+	 * one-way latency, otherwise high-ping shooters have to lead a visible hitscan target.
 	 */
 	static double EstimateClientViewServerTime(
 		const AActor* Viewer, double CurrentEstimatedServerTime);
@@ -32,9 +32,9 @@ public:
 
 	static constexpr double InterpolationBufferSeconds = 0.050;
 	/** Maximum age of the world shown to a shooter that receives full compensation. */
-	static constexpr double MaxCompensatedViewAgeSeconds = 0.120;
+	static constexpr double MaxCompensatedViewAgeSeconds = 0.150;
 	/** Also includes the RPC's trip from the shooter back to the server. */
-	static constexpr double MaxServerRewindSeconds = 0.180;
+	static constexpr double MaxServerRewindSeconds = 0.250;
 
 private:
 	friend class FScopedHitboxRewind;
@@ -53,7 +53,8 @@ private:
 
 	TArray<FSnapshot> History;
 	static TArray<TWeakObjectPtr<UHitRewindComponent>> Registry;
-	static constexpr double HistoryDuration = 0.35;
+	/** Keep a small sampling margin beyond the largest accepted rewind request. */
+	static constexpr double HistoryDuration = MaxServerRewindSeconds + 0.050;
 };
 
 /**
