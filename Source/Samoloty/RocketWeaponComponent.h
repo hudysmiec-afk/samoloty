@@ -62,6 +62,7 @@ protected:
 	/** Allows a barrage variant to alter only the final flight direction while retaining shared salvo logic. */
 	virtual void ConfigureRocketLaunchData(FRocketLaunchData& LaunchData,
 		const FRocketSeparationPath& SeparationPath, FRandomStream& RandomStream) const;
+	virtual bool UsesDataOnlyRocketSimulation() const { return true; }
 
 	/** Copies shared projectile/effect defaults only where this component still uses native defaults. */
 	void InheritMissingPresentationFrom(const URocketWeaponComponent& Source);

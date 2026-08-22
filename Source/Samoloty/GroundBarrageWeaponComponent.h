@@ -22,6 +22,7 @@ protected:
 	virtual void PrepareSalvo(const FRocketBarrageStats& Stats) override;
 	virtual void ConfigureRocketLaunchData(FRocketLaunchData& LaunchData,
 		const FRocketSeparationPath& SeparationPath, FRandomStream& RandomStream) const override;
+	virtual bool UsesDataOnlyRocketSimulation() const override { return false; }
 
 	/** Random radius around the shared ground aim point used by rockets in a salvo. */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Plane|Weapons|Ground Barrage",

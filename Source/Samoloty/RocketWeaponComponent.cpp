@@ -5,6 +5,7 @@
 #include "JetStatsComponent.h"
 #include "RocketLaunchPattern.h"
 #include "RocketProjectile.h"
+#include "RocketSimulationManager.h"
 #include "Components/SceneComponent.h"
 #include "Engine/Engine.h"
 #include "Engine/World.h"
@@ -292,6 +293,18 @@ void URocketWeaponComponent::SpawnRocket(USceneComponent* SpawnPoint, const bool
 			SMALL_NUMBER, SeparationPath.Direction);
 	const FTransform SpawnTransform(InitialDirection.Rotation(), Data.StartLocation);
 	APawn* OwnerPawn = Cast<APawn>(GetOwner());
+	if (UsesDataOnlyRocketSimulation())
+	{
+		if (URocketSimulationManager* Manager =
+			GetWorld()->GetSubsystem<URocketSimulationManager>())
+		{
+			if (Manager->LaunchDataOnlyStraightRocket(
+				RocketClass, Data, GetOwner(), OwnerPawn) != INDEX_NONE)
+			{
+				return;
+			}
+		}
+	}
 	ARocketProjectile* Rocket = GetWorld()->SpawnActorDeferred<ARocketProjectile>(RocketClass, SpawnTransform,
 		GetOwner(), OwnerPawn, ESpawnActorCollisionHandlingMethod::AlwaysSpawn);
 	if (Rocket)
@@ -338,7 +351,10 @@ void URocketWeaponComponent::UpdateDebugCounts(const float DeltaTime)
 	if (DebugCountAccumulator >= 0.25f)
 	{
 		DebugCountAccumulator = 0.0f;
-		ServerActiveRocketCountForDebug = ARocketProjectile::GetServerActiveRocketCount();
+		const URocketSimulationManager* Manager =
+			GetWorld()->GetSubsystem<URocketSimulationManager>();
+		ServerActiveRocketCountForDebug = Manager
+			? Manager->GetActiveRocketCount() : ARocketProjectile::GetServerActiveRocketCount();
 	}
 }
 

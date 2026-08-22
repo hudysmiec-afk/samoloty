@@ -3,6 +3,7 @@
 #include "EvasiveRollComponent.h"
 #include "HealthComponent.h"
 #include "MissileWarningComponent.h"
+#include "RocketSimulationManager.h"
 #include "Components/SceneComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "DrawDebugHelpers.h"
@@ -31,7 +32,7 @@ namespace
 
 ARocketProjectile::ARocketProjectile()
 {
-	PrimaryActorTick.bCanEverTick = true;
+	PrimaryActorTick.bCanEverTick = false;
 	bReplicates = true;
 	SetReplicateMovement(false);
 	SetNetUpdateFrequency(10.0f);
@@ -72,6 +73,11 @@ void ARocketProjectile::InitializeRocket(const FRocketLaunchData& InLaunchData)
 	check(HasAuthority());
 	LaunchData = InLaunchData;
 	bInitialized = true;
+	if (URocketSimulationManager* Manager =
+		GetWorld()->GetSubsystem<URocketSimulationManager>())
+	{
+		SimulationManagerHandle = Manager->RegisterRocket(this, LaunchData, GetOwner());
+	}
 	ApplyLaunchState();
 	if (LaunchData.GuidanceMode == ERocketGuidanceMode::Homing)
 	{
@@ -85,9 +91,82 @@ void ARocketProjectile::InitializeRocket(const FRocketLaunchData& InLaunchData)
 	ForceNetUpdate();
 }
 
+void ARocketProjectile::InitializeManagedVisual(const FRocketLaunchData& InLaunchData)
+{
+	LaunchData = InLaunchData;
+	bInitialized = true;
+	bManagedVisualOnly = true;
+	ApplyLaunchState();
+	if (URocketSimulationManager* Manager =
+		GetWorld()->GetSubsystem<URocketSimulationManager>())
+	{
+		SimulationManagerHandle = Manager->RegisterRocket(this, LaunchData, nullptr);
+	}
+	const float RemainingLifetime = LaunchData.Speed > KINDA_SMALL_NUMBER
+		? LaunchData.MaxTravelDistance / LaunchData.Speed + 2.0f : 2.0f;
+	SetLifeSpan(RemainingLifetime);
+}
+
+void ARocketProjectile::PresentManagedExplosion(const FCombatImpactEvent& Impact)
+{
+	if (bExploded)
+	{
+		return;
+	}
+	bExploded = true;
+	ExplosionImpact = Impact;
+	FVector ResolvedLocation;
+	FVector ResolvedNormal;
+	ExplosionImpact.Resolve(ResolvedLocation, ResolvedNormal);
+	SetActorLocation(ResolvedLocation);
+	PlayExplosionCosmetics();
+	SetLifeSpan(ExplosionReplicationDelay);
+}
+
+void ARocketProjectile::PlayManagedExplosionCosmetics(UWorld* World,
+	const FRocketLaunchData& InLaunchData, const FCombatImpactEvent& Impact) const
+{
+	if (!World || World->GetNetMode() == NM_DedicatedServer)
+	{
+		return;
+	}
+	FVector Location;
+	FVector Normal;
+	Impact.Resolve(Location, Normal);
+	if (ExplosionSound)
+	{
+		UGameplayStatics::SpawnSoundAtLocation(World, ExplosionSound, Location);
+	}
+	if (ExplosionEffect)
+	{
+		UNiagaraComponent* Component = UNiagaraFunctionLibrary::SpawnSystemAtLocation(
+			World, ExplosionEffect, Location, FRotator::ZeroRotator,
+			FVector::OneVector, true, false);
+		if (Component)
+		{
+			Component->SetVariableFloat(TEXT("User.ExplosionRadius"),
+				FMath::Max(InLaunchData.ProximityRadius, MinimumExplosionVisualRadius));
+			Component->Activate(true);
+		}
+	}
+	if (InLaunchData.bDrawDebug)
+	{
+		DrawDebugSphere(World, Location, 150.0f, 16, FColor::Orange,
+			false, 1.0f, 0, 3.0f);
+	}
+}
+
 void ARocketProjectile::OnRep_LaunchData()
 {
 	bInitialized = true;
+	if (SimulationManagerHandle == INDEX_NONE)
+	{
+		if (URocketSimulationManager* Manager =
+			GetWorld()->GetSubsystem<URocketSimulationManager>())
+		{
+			SimulationManagerHandle = Manager->RegisterRocket(this, LaunchData, GetOwner());
+		}
+	}
 	ApplyLaunchState();
 }
 
@@ -114,9 +193,8 @@ void ARocketProjectile::OnRep_HomingDisabled()
 	RefreshMissileWarningRegistration();
 }
 
-void ARocketProjectile::Tick(const float DeltaSeconds)
+void ARocketProjectile::SimulateFromManager(const float DeltaSeconds)
 {
-	Super::Tick(DeltaSeconds);
 	if (!bInitialized || bExploded)
 	{
 		return;
@@ -224,7 +302,7 @@ void ARocketProjectile::SimulateRocketMovement(const float DeltaSeconds)
 	const float NewDistanceTraveled = DistanceTraveled + StepDistance;
 	const FVector End = GetLocationAtDistance(NewDistanceTraveled);
 
-	if (HasAuthority())
+	if (HasAuthority() && !bManagedVisualOnly)
 	{
 		FHitResult Hit;
 		if (CheckPhysicalCollision(Start, End, Hit))
@@ -259,7 +337,8 @@ void ARocketProjectile::SimulateRocketMovement(const float DeltaSeconds)
 	{
 		DrawDebugLine(GetWorld(), Start, End, FColor::Cyan, false, 0.15f, 0, 1.0f);
 	}
-	if (HasAuthority() && DistanceTraveled >= LaunchData.MaxTravelDistance - KINDA_SMALL_NUMBER)
+	if (HasAuthority() && !bManagedVisualOnly
+		&& DistanceTraveled >= LaunchData.MaxTravelDistance - KINDA_SMALL_NUMBER)
 	{
 		Explode(nullptr, End);
 	}
@@ -632,6 +711,15 @@ void ARocketProjectile::PlayExplosionCosmetics()
 
 void ARocketProjectile::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
+	if (SimulationManagerHandle != INDEX_NONE)
+	{
+		if (URocketSimulationManager* Manager =
+			GetWorld()->GetSubsystem<URocketSimulationManager>())
+		{
+			Manager->UnregisterRocket(SimulationManagerHandle);
+		}
+		SimulationManagerHandle = INDEX_NONE;
+	}
 	ClearMissileWarningRegistration();
 	OnRocketFinished.Broadcast(this);
 	if (bCountedOnServer)

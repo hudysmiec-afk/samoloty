@@ -103,13 +103,19 @@ class SAMOLOTY_API ARocketProjectile : public AActor
 public:
 	ARocketProjectile();
 	virtual void BeginPlay() override;
-	virtual void Tick(float DeltaSeconds) override;
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
 
 	void InitializeRocket(const FRocketLaunchData& InLaunchData);
+	void InitializeManagedVisual(const FRocketLaunchData& InLaunchData);
+	void PresentManagedExplosion(const FCombatImpactEvent& Impact);
+	void PlayManagedExplosionCosmetics(UWorld* World, const FRocketLaunchData& InLaunchData,
+		const FCombatImpactEvent& Impact) const;
+	void SimulateFromManager(float DeltaSeconds);
 
 	static int32 GetServerActiveRocketCount() { return ServerActiveRocketCount; }
+	float GetPhysicalCollisionRadius() const { return PhysicalCollisionRadius; }
+	int32 GetManagedTrailProfileId() const { return ManagedTrailProfileId; }
 
 	FRocketFinishedSignature OnRocketFinished;
 
@@ -132,6 +138,10 @@ protected:
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Rocket|Collision", meta=(ClampMin="1"))
 	float PhysicalCollisionRadius = 25.0f;
+
+	/** Selects which shared Niagara trail profile consumes this rocket's NDC entry. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Rocket|Visual", meta=(ClampMin="0"))
+	int32 ManagedTrailProfileId = 0;
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Rocket|Effects", meta=(ClampMin="0.05"))
 	float ExplosionReplicationDelay = 0.25f;
@@ -204,6 +214,8 @@ private:
 	bool bInitialized = false;
 	bool bCountedOnServer = false;
 	bool bHasHomingCorrection = false;
+	bool bManagedVisualOnly = false;
+	int32 SimulationManagerHandle = INDEX_NONE;
 	FVector CurrentHomingDirection = FVector::ForwardVector;
 	FVector HomingCorrectionLocation = FVector::ZeroVector;
 	FVector HomingCorrectionDirection = FVector::ForwardVector;
