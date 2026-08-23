@@ -33,6 +33,58 @@ struct FManagedRocketExplosionEvent
 	FCombatImpactEvent Impact;
 };
 
+USTRUCT()
+struct FManagedRocketHomingUpdateEvent
+{
+	GENERATED_BODY()
+
+	UPROPERTY()
+	uint32 RocketId = 0;
+
+	UPROPERTY()
+	FVector_NetQuantize100 Location;
+
+	UPROPERTY()
+	FVector_NetQuantizeNormal Direction = FVector::ForwardVector;
+
+	UPROPERTY()
+	float DistanceTraveled = 0.0f;
+
+	UPROPERTY()
+	double ServerTime = 0.0;
+
+	UPROPERTY()
+	bool bHomingDisabled = false;
+};
+
+struct FRocketVisualPerfCounters
+{
+	double WindowStartSeconds = 0.0;
+	double TotalTickMilliseconds = 0.0;
+	double MaxTickMilliseconds = 0.0;
+	double TotalNdcMilliseconds = 0.0;
+	double MaxNdcMilliseconds = 0.0;
+	uint64 TickCount = 0;
+	uint64 LaunchEventsReceived = 0;
+	uint64 VisualRocketsAdded = 0;
+	uint64 ExplosionEventsReceived = 0;
+	uint64 HomingUpdatesReceived = 0;
+	uint64 InstanceUpdates = 0;
+	uint64 DirtyGroups = 0;
+	uint64 NdcPublishes = 0;
+	uint64 NdcRows = 0;
+	uint64 DistanceExpired = 0;
+	int32 MaxVisualRockets = 0;
+	int32 MaxLaunchBatch = 0;
+	int32 MaxUpdateBatch = 0;
+
+	void Reset(const double StartSeconds)
+	{
+		*this = FRocketVisualPerfCounters();
+		WindowStartSeconds = StartSeconds;
+	}
+};
+
 /** One replicated event channel for every data-only rocket in a world. */
 UCLASS(NotBlueprintable)
 class SAMOLOTY_API ARocketSimulationReplicator : public AActor
@@ -43,7 +95,8 @@ public:
 	ARocketSimulationReplicator();
 	virtual void Tick(float DeltaSeconds) override;
 	void BroadcastLaunchBatch(const TArray<FManagedRocketLaunchEvent>& Events);
-	void BroadcastExplosionBatch(const TArray<FManagedRocketExplosionEvent>& Events);
+	void BroadcastUpdateBatch(const TArray<FManagedRocketExplosionEvent>& ExplosionEvents,
+		const TArray<FManagedRocketHomingUpdateEvent>& HomingUpdateEvents);
 
 private:
 	struct FVisualRocketRecord
@@ -57,6 +110,11 @@ private:
 		int32 VisualGroupIndex = INDEX_NONE;
 		int32 InstanceIndex = INDEX_NONE;
 		int32 TrailProfileId = 0;
+		TWeakObjectPtr<AActor> HomingTarget;
+		TWeakObjectPtr<AActor> WarningTarget;
+		FVector Location = FVector::ZeroVector;
+		FVector Direction = FVector::ForwardVector;
+		bool bHomingDisabled = false;
 	};
 
 	struct FVisualRocketGroup
@@ -71,16 +129,24 @@ private:
 	void MulticastLaunchBatch(const TArray<FManagedRocketLaunchEvent>& Events);
 
 	UFUNCTION(NetMulticast, Unreliable)
-	void MulticastExplosionBatch(const TArray<FManagedRocketExplosionEvent>& Events);
+	void MulticastUpdateBatch(const TArray<FManagedRocketExplosionEvent>& ExplosionEvents,
+		const TArray<FManagedRocketHomingUpdateEvent>& HomingUpdateEvents);
 
 	int32 FindOrCreateVisualGroup(TSubclassOf<ARocketProjectile> RocketClass);
 	void BuildCurveCache(FVisualRocketRecord& Record) const;
 	FVector EvaluateCurve(const FVisualRocketRecord& Record, float Parameter) const;
 	float FindCurveParameter(const FVisualRocketRecord& Record, float Distance) const;
 	FTransform GetRocketTransform(const FVisualRocketRecord& Record) const;
+	FTransform GetPathTransform(const FVisualRocketRecord& Record, float Distance) const;
+	void AdvanceVisualRocket(FVisualRocketRecord& Record, float DeltaSeconds) const;
+	FVector RotateDirectionTowards(const FVector& CurrentDirection,
+		const FVector& DesiredDirection, float MaxTurnRateDegreesPerSecond,
+		float DeltaSeconds) const;
+	void ApplyHomingUpdate(const FManagedRocketHomingUpdateEvent& Event);
 	FTransform GetTrailTransform(const FVisualRocketRecord& Record) const;
 	void PublishTrailData();
 	void ReleaseVisualRocket(uint32 RocketId, const FCombatImpactEvent* Impact);
+	void FinishPerfTick(double TickStartSeconds);
 
 	UPROPERTY()
 	TObjectPtr<class UNiagaraDataChannelAsset> TrailDataChannel;
@@ -94,4 +160,6 @@ private:
 	TArray<FVisualRocketGroup> VisualGroups;
 	TMap<TSubclassOf<ARocketProjectile>, int32> VisualGroupByClass;
 	TMap<uint32, FVisualRocketRecord> VisualRockets;
+	FRocketVisualPerfCounters PerfCounters;
+	bool bPerfLoggingThisTick = false;
 };

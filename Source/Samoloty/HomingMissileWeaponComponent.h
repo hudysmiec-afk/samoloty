@@ -43,6 +43,7 @@ public:
 
 	UFUNCTION(BlueprintPure, Category="Plane|Weapons")
 	EHomingMissileWeaponState GetWeaponState() const { return WeaponState; }
+	void DrawWeaponDebug(bool bForceDisplay = false) const;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Plane|Weapons|Debug")
 	bool bShowWeaponDebug = true;
@@ -77,11 +78,11 @@ private:
 	void EnterCooldown();
 	void SpawnMissile(USceneComponent* SpawnPoint, bool bLeftSide, int32 SideIndex,
 		int32 SideCount, FRandomStream& RandomStream, AActor* TargetActor);
+	void UpdateDebugCounts(float DeltaTime);
 	AActor* ValidateRequestedTarget(AActor* TargetActor) const;
 	AActor* GetLiveSequenceTarget() const;
 	UMissileTargetingComponent* GetTargetingComponent() const;
 	double GetServerTimeSeconds() const;
-	void DrawWeaponDebug() const;
 
 	UPROPERTY(Replicated)
 	EHomingMissileWeaponState WeaponState = EHomingMissileWeaponState::Ready;
@@ -92,6 +93,12 @@ private:
 	UPROPERTY(Replicated)
 	double NextActionServerTime = 0.0;
 
+	UPROPERTY(Replicated)
+	int32 ActiveOwnedMissileCount = 0;
+
+	UPROPERTY(Replicated)
+	int32 ServerActiveRocketCountForDebug = 0;
+
 	TWeakObjectPtr<USceneComponent> LeftSpawnPoint;
 	TWeakObjectPtr<USceneComponent> RightSpawnPoint;
 	TWeakObjectPtr<AActor> RequestedTarget;
@@ -101,4 +108,5 @@ private:
 	bool bServerFireHeld = false;
 	/** AI selects targets independently of the player-facing lock cone. */
 	bool bRequestedTargetFromAI = false;
+	float DebugCountAccumulator = 0.0f;
 };

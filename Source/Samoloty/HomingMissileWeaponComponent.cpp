@@ -7,6 +7,7 @@
 #include "RadarComponent.h"
 #include "RocketLaunchPattern.h"
 #include "RocketProjectile.h"
+#include "RocketSimulationManager.h"
 #include "Components/SceneComponent.h"
 #include "Engine/Engine.h"
 #include "Engine/World.h"
@@ -130,7 +131,10 @@ void UHomingMissileWeaponComponent::TickComponent(const float DeltaTime, const E
 	}
 	if (IsOwnerFireBlocked())
 	{
-		DrawWeaponDebug();
+		if (GetOwner()->HasAuthority())
+		{
+			UpdateDebugCounts(DeltaTime);
+		}
 		return;
 	}
 	const APawn* OwnerPawn = Cast<APawn>(GetOwner());
@@ -154,7 +158,6 @@ void UHomingMissileWeaponComponent::TickComponent(const float DeltaTime, const E
 				NextActionServerTime = 0.0;
 				SequenceTarget.Reset();
 			}
-			DrawWeaponDebug();
 			return;
 		}
 
@@ -176,8 +179,8 @@ void UHomingMissileWeaponComponent::TickComponent(const float DeltaTime, const E
 		{
 			StartSequence();
 		}
+		UpdateDebugCounts(DeltaTime);
 	}
-	DrawWeaponDebug();
 }
 
 void UHomingMissileWeaponComponent::UpdateRequestedTargetFromLocal()
@@ -390,6 +393,15 @@ void UHomingMissileWeaponComponent::SpawnMissile(USceneComponent* SpawnPoint, co
 			SMALL_NUMBER, SeparationPath.Direction);
 	const FTransform SpawnTransform(InitialDirection.Rotation(), SeparationPath.StartLocation);
 	APawn* OwnerPawn = Cast<APawn>(GetOwner());
+	if (URocketSimulationManager* Manager =
+		GetWorld()->GetSubsystem<URocketSimulationManager>())
+	{
+		if (Manager->LaunchDataOnlyRocket(
+			MissileClass, Data, GetOwner(), OwnerPawn, this) != INDEX_NONE)
+		{
+			return;
+		}
+	}
 	ARocketProjectile* Missile = GetWorld()->SpawnActorDeferred<ARocketProjectile>(MissileClass,
 		SpawnTransform, GetOwner(), OwnerPawn, ESpawnActorCollisionHandlingMethod::AlwaysSpawn);
 	if (Missile)
@@ -397,6 +409,23 @@ void UHomingMissileWeaponComponent::SpawnMissile(USceneComponent* SpawnPoint, co
 		Missile->InitializeRocket(Data);
 		Missile->FinishSpawning(SpawnTransform);
 	}
+}
+
+void UHomingMissileWeaponComponent::UpdateDebugCounts(const float DeltaTime)
+{
+	DebugCountAccumulator += DeltaTime;
+	if (DebugCountAccumulator < 0.25f || !GetWorld())
+	{
+		return;
+	}
+	DebugCountAccumulator = 0.0f;
+	const URocketSimulationManager* Manager =
+		GetWorld()->GetSubsystem<URocketSimulationManager>();
+	ActiveOwnedMissileCount = Manager
+		? Manager->GetActiveRocketCountForSource(this)
+		: 0;
+	ServerActiveRocketCountForDebug = Manager
+		? Manager->GetActiveRocketCount() : ARocketProjectile::GetServerActiveRocketCount();
 }
 
 void UHomingMissileWeaponComponent::EnterCooldown()
@@ -465,10 +494,10 @@ double UHomingMissileWeaponComponent::GetServerTimeSeconds() const
 	return GameState ? GameState->GetServerWorldTimeSeconds() : GetWorld()->GetTimeSeconds();
 }
 
-void UHomingMissileWeaponComponent::DrawWeaponDebug() const
+void UHomingMissileWeaponComponent::DrawWeaponDebug(const bool bForceDisplay) const
 {
 	const APawn* OwnerPawn = Cast<APawn>(GetOwner());
-	if (!bShowWeaponDebug || !IsWeaponEquipped() || !OwnerPawn
+	if ((!bShowWeaponDebug && !bForceDisplay) || (!IsWeaponEquipped() && !bForceDisplay) || !OwnerPawn
 		|| !OwnerPawn->IsLocallyControlled() || !GEngine)
 	{
 		return;
@@ -484,10 +513,11 @@ void UHomingMissileWeaponComponent::DrawWeaponDebug() const
 	const float Remaining = FMath::Max(0.0f,
 		static_cast<float>(NextActionServerTime - GetServerTimeSeconds()));
 	const FString Message = FString::Printf(
-		TEXT("HOMING MISSILE [%s] | %dx%d | Salvo %d/%d | Next %.2fs | Speed %.0f cm/s"),
-		StateText, Stats.SalvoCount, Stats.MissilesPerSalvo, SalvosFired,
-		Stats.SalvoCount, Remaining, Stats.MissileSpeed);
-	GEngine->AddOnScreenDebugMessage(static_cast<uint64>(GetUniqueID()), 0.0f, FColor::Cyan, Message);
+		TEXT("HOMING MISSILE [%s]\nSalvos: %d / %d | Missiles: %dx%d | Next: %.2fs\nSpeed: %.0f cm/s | Managed owned: %d | Server active: %d"),
+		StateText, SalvosFired, Stats.SalvoCount, Stats.SalvoCount,
+		Stats.MissilesPerSalvo, Remaining, Stats.MissileSpeed,
+		ActiveOwnedMissileCount, ServerActiveRocketCountForDebug);
+	GEngine->AddOnScreenDebugMessage(9101, 0.0f, FColor::Orange, Message);
 }
 
 void UHomingMissileWeaponComponent::GetLifetimeReplicatedProps(
@@ -497,6 +527,8 @@ void UHomingMissileWeaponComponent::GetLifetimeReplicatedProps(
 	DOREPLIFETIME_CONDITION(UHomingMissileWeaponComponent, WeaponState, COND_OwnerOnly);
 	DOREPLIFETIME_CONDITION(UHomingMissileWeaponComponent, SalvosFired, COND_OwnerOnly);
 	DOREPLIFETIME_CONDITION(UHomingMissileWeaponComponent, NextActionServerTime, COND_OwnerOnly);
+	DOREPLIFETIME_CONDITION(UHomingMissileWeaponComponent, ActiveOwnedMissileCount, COND_OwnerOnly);
+	DOREPLIFETIME_CONDITION(UHomingMissileWeaponComponent, ServerActiveRocketCountForDebug, COND_OwnerOnly);
 }
 bool UHomingMissileWeaponComponent::GetCooldownStatus(float& OutRemainingSeconds,
 	float& OutDurationSeconds) const

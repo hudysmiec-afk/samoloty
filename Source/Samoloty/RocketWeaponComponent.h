@@ -41,6 +41,7 @@ public:
 
 	UFUNCTION(BlueprintPure, Category="Plane|Weapons")
 	ERocketWeaponState GetWeaponState() const { return WeaponState; }
+	void DrawWeaponDebug(bool bForceDisplay = false) const;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Plane|Weapons|Debug")
 	bool bShowWeaponDebug = true;
@@ -84,7 +85,6 @@ private:
 		FRandomStream& RandomStream);
 	void HandleRocketFinished(ARocketProjectile* Rocket);
 	void UpdateDebugCounts(float DeltaTime);
-	void DrawWeaponDebug() const;
 	double GetServerTimeSeconds() const;
 
 	UPROPERTY(Replicated)

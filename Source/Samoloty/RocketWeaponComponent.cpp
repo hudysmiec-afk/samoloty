@@ -89,7 +89,6 @@ void URocketWeaponComponent::TickComponent(const float DeltaTime, const ELevelTi
 	if (IsOwnerFireBlocked())
 	{
 		UpdateDebugCounts(DeltaTime);
-		DrawWeaponDebug();
 		return;
 	}
 	if (GetOwner()->HasAuthority())
@@ -105,7 +104,6 @@ void URocketWeaponComponent::TickComponent(const float DeltaTime, const ELevelTi
 				NextActionServerTime = 0.0;
 			}
 			UpdateDebugCounts(DeltaTime);
-			DrawWeaponDebug();
 			return;
 		}
 		const double ServerNow = GetWorld()->GetTimeSeconds();
@@ -128,7 +126,6 @@ void URocketWeaponComponent::TickComponent(const float DeltaTime, const ELevelTi
 		}
 		UpdateDebugCounts(DeltaTime);
 	}
-	DrawWeaponDebug();
 }
 
 void URocketWeaponComponent::OnWeaponEquippedChanged()
@@ -298,8 +295,8 @@ void URocketWeaponComponent::SpawnRocket(USceneComponent* SpawnPoint, const bool
 		if (URocketSimulationManager* Manager =
 			GetWorld()->GetSubsystem<URocketSimulationManager>())
 		{
-			if (Manager->LaunchDataOnlyStraightRocket(
-				RocketClass, Data, GetOwner(), OwnerPawn) != INDEX_NONE)
+			if (Manager->LaunchDataOnlyRocket(
+				RocketClass, Data, GetOwner(), OwnerPawn, this) != INDEX_NONE)
 			{
 				return;
 			}
@@ -353,6 +350,8 @@ void URocketWeaponComponent::UpdateDebugCounts(const float DeltaTime)
 		DebugCountAccumulator = 0.0f;
 		const URocketSimulationManager* Manager =
 			GetWorld()->GetSubsystem<URocketSimulationManager>();
+		ActiveOwnedRocketCount = Manager
+			? Manager->GetActiveRocketCountForSource(this) : ActiveOwnedRockets.Num();
 		ServerActiveRocketCountForDebug = Manager
 			? Manager->GetActiveRocketCount() : ARocketProjectile::GetServerActiveRocketCount();
 	}
@@ -364,10 +363,10 @@ double URocketWeaponComponent::GetServerTimeSeconds() const
 	return GameState ? GameState->GetServerWorldTimeSeconds() : GetWorld()->GetTimeSeconds();
 }
 
-void URocketWeaponComponent::DrawWeaponDebug() const
+void URocketWeaponComponent::DrawWeaponDebug(const bool bForceDisplay) const
 {
 	const APawn* OwnerPawn = Cast<APawn>(GetOwner());
-	if (!IsWeaponEquipped() || !bShowWeaponDebug || !OwnerPawn
+	if ((!bShowWeaponDebug && !bForceDisplay) || (!IsWeaponEquipped() && !bForceDisplay) || !OwnerPawn
 		|| !OwnerPawn->IsLocallyControlled() || !GEngine)
 	{
 		return;
@@ -384,12 +383,12 @@ void URocketWeaponComponent::DrawWeaponDebug() const
 	const float Remaining = FMath::Max(0.0f, static_cast<float>(NextActionServerTime - GetServerTimeSeconds()));
 	const FString WeaponName = GetWeaponDisplayName().ToString().ToUpper();
 	const FString Message = FString::Printf(
-		TEXT("HP: %.0f / %.0f\n%s [%s]\nSalvos: %d / %d | Next: %.2fs\nFire held: %s\nActive owned: %d | Server active: %d"),
+		TEXT("HP: %.0f / %.0f\n%s [%s]\nSalvos: %d / %d | Next: %.2fs\nFire held: %s\nManaged owned: %d | Server active: %d"),
 		Health->GetCurrentHealth(), Health->GetMaxHealth(), *WeaponName, StateText,
 		SalvosFired, Stats.SalvoCount,
 		Remaining, bLocalFireHeld ? TEXT("YES") : TEXT("NO"), ActiveOwnedRocketCount,
 		ServerActiveRocketCountForDebug);
-	GEngine->AddOnScreenDebugMessage(static_cast<uint64>(GetUniqueID()), 0.0f, FColor::Yellow, Message);
+	GEngine->AddOnScreenDebugMessage(9101, 0.0f, FColor::Orange, Message);
 }
 
 void URocketWeaponComponent::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const

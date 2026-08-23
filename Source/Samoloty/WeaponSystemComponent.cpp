@@ -1,6 +1,8 @@
 #include "WeaponSystemComponent.h"
 
 #include "ArcadeFlightComponent.h"
+#include "HomingMissileWeaponComponent.h"
+#include "RocketWeaponComponent.h"
 #include "Components/SceneComponent.h"
 #include "Engine/Engine.h"
 #include "GameFramework/Pawn.h"
@@ -17,12 +19,14 @@ namespace
 UWeaponSystemComponent::UWeaponSystemComponent()
 {
 	PrimaryComponentTick.bCanEverTick = true;
+	PrimaryComponentTick.bStartWithTickEnabled = true;
 	SetIsReplicatedByDefault(true);
 }
 
 void UWeaponSystemComponent::BeginPlay()
 {
 	Super::BeginPlay();
+	SetComponentTickEnabled(true);
 	DiscoverWeapons();
 	ApplySelection(EWeaponSlot::Gun);
 	ApplySelection(EWeaponSlot::Missile);
@@ -32,7 +36,16 @@ void UWeaponSystemComponent::TickComponent(const float DeltaTime, const ELevelTi
 	FActorComponentTickFunction* ThisTickFunction)
 {
 	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
-	DrawWeaponSystemDebug();
+	const UPlaneWeaponComponent* ActiveMissile = GetActiveWeapon(EWeaponSlot::Missile);
+	if (const URocketWeaponComponent* Rocket = Cast<URocketWeaponComponent>(ActiveMissile))
+	{
+		Rocket->DrawWeaponDebug();
+	}
+	else if (const UHomingMissileWeaponComponent* Homing =
+		Cast<UHomingMissileWeaponComponent>(ActiveMissile))
+	{
+		Homing->DrawWeaponDebug();
+	}
 }
 
 void UWeaponSystemComponent::DiscoverWeapons()

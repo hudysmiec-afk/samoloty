@@ -5,6 +5,9 @@
 #include "Components/StaticMeshComponent.h"
 #include "Engine/World.h"
 #include "GameFramework/GameStateBase.h"
+#include "HAL/IConsoleManager.h"
+#include "HAL/PlatformTime.h"
+#include "MissileWarningComponent.h"
 #include "NiagaraCommon.h"
 #include "NiagaraComponent.h"
 #include "NiagaraDataChannelAccessor.h"
@@ -13,6 +16,40 @@
 #include "NiagaraFunctionLibrary.h"
 #include "NiagaraSystem.h"
 #include "UObject/ConstructorHelpers.h"
+
+namespace
+{
+	bool IsRocketPerfLoggingEnabled()
+	{
+		const IConsoleVariable* PerfLog = IConsoleManager::Get().FindConsoleVariable(
+			TEXT("samoloty.Rockets.PerfLog"));
+		return PerfLog && PerfLog->GetInt() != 0;
+	}
+
+	double GetRocketPerfLogInterval()
+	{
+		const IConsoleVariable* Interval = IConsoleManager::Get().FindConsoleVariable(
+			TEXT("samoloty.Rockets.PerfLogInterval"));
+		return Interval ? FMath::Max(0.1, static_cast<double>(Interval->GetFloat())) : 1.0;
+	}
+
+	const TCHAR* GetNetModeName(const ENetMode NetMode)
+	{
+		switch (NetMode)
+		{
+		case NM_Standalone:
+			return TEXT("Standalone");
+		case NM_DedicatedServer:
+			return TEXT("DedicatedServer");
+		case NM_ListenServer:
+			return TEXT("ListenServer");
+		case NM_Client:
+			return TEXT("Client");
+		default:
+			return TEXT("Unknown");
+		}
+	}
+}
 
 ARocketSimulationReplicator::ARocketSimulationReplicator()
 {
@@ -44,15 +81,28 @@ void ARocketSimulationReplicator::Tick(const float DeltaSeconds)
 	{
 		return;
 	}
+	const double TickStartSeconds = FPlatformTime::Seconds();
+	bPerfLoggingThisTick = IsRocketPerfLoggingEnabled();
+	if (!bPerfLoggingThisTick)
+	{
+		PerfCounters.Reset(TickStartSeconds);
+	}
+	else if (PerfCounters.WindowStartSeconds <= 0.0)
+	{
+		PerfCounters.WindowStartSeconds = TickStartSeconds;
+	}
 	TArray<uint32> Expired;
 	TArray<bool> DirtyGroups;
 	DirtyGroups.Init(false, VisualGroups.Num());
+	if (bPerfLoggingThisTick)
+	{
+		PerfCounters.MaxVisualRockets = FMath::Max(
+			PerfCounters.MaxVisualRockets, VisualRockets.Num());
+	}
 	for (TPair<uint32, FVisualRocketRecord>& Pair : VisualRockets)
 	{
 		FVisualRocketRecord& Record = Pair.Value;
-		Record.DistanceTraveled = FMath::Min(
-			Record.DistanceTraveled + Record.LaunchData.Speed * DeltaSeconds,
-			Record.LaunchData.MaxTravelDistance);
+		AdvanceVisualRocket(Record, DeltaSeconds);
 		if (!VisualGroups.IsValidIndex(Record.VisualGroupIndex))
 		{
 			Expired.Add(Pair.Key);
@@ -64,6 +114,10 @@ void ARocketSimulationReplicator::Tick(const float DeltaSeconds)
 			Group.Instances->UpdateInstanceTransform(Record.InstanceIndex,
 				Group.MeshRelativeTransform * GetRocketTransform(Record),
 				false, false, true);
+			if (bPerfLoggingThisTick)
+			{
+				++PerfCounters.InstanceUpdates;
+			}
 			DirtyGroups[Record.VisualGroupIndex] = true;
 		}
 		if (Record.DistanceTraveled >= Record.LaunchData.MaxTravelDistance - KINDA_SMALL_NUMBER)
@@ -76,12 +130,21 @@ void ARocketSimulationReplicator::Tick(const float DeltaSeconds)
 		if (DirtyGroups[GroupIndex] && VisualGroups[GroupIndex].Instances)
 		{
 			VisualGroups[GroupIndex].Instances->MarkRenderStateDirty();
+			if (bPerfLoggingThisTick)
+			{
+				++PerfCounters.DirtyGroups;
+			}
 		}
 	}
 	PublishTrailData();
 	for (const uint32 RocketId : Expired)
 	{
 		ReleaseVisualRocket(RocketId, nullptr);
+	}
+	if (bPerfLoggingThisTick)
+	{
+		PerfCounters.DistanceExpired += Expired.Num();
+		FinishPerfTick(TickStartSeconds);
 	}
 }
 
@@ -94,12 +157,13 @@ void ARocketSimulationReplicator::BroadcastLaunchBatch(
 	}
 }
 
-void ARocketSimulationReplicator::BroadcastExplosionBatch(
-	const TArray<FManagedRocketExplosionEvent>& Events)
+void ARocketSimulationReplicator::BroadcastUpdateBatch(
+	const TArray<FManagedRocketExplosionEvent>& ExplosionEvents,
+	const TArray<FManagedRocketHomingUpdateEvent>& HomingUpdateEvents)
 {
-	if (HasAuthority() && !Events.IsEmpty())
+	if (HasAuthority() && (!ExplosionEvents.IsEmpty() || !HomingUpdateEvents.IsEmpty()))
 	{
-		MulticastExplosionBatch(Events);
+		MulticastUpdateBatch(ExplosionEvents, HomingUpdateEvents);
 	}
 }
 
@@ -109,6 +173,17 @@ void ARocketSimulationReplicator::MulticastLaunchBatch_Implementation(
 	if (GetNetMode() == NM_DedicatedServer || !GetWorld())
 	{
 		return;
+	}
+	const bool bRecordPerf = IsRocketPerfLoggingEnabled();
+	if (bRecordPerf)
+	{
+		if (PerfCounters.WindowStartSeconds <= 0.0)
+		{
+			PerfCounters.WindowStartSeconds = FPlatformTime::Seconds();
+		}
+		PerfCounters.LaunchEventsReceived += Events.Num();
+		PerfCounters.MaxLaunchBatch = FMath::Max(
+			PerfCounters.MaxLaunchBatch, Events.Num());
 	}
 	for (const FManagedRocketLaunchEvent& Event : Events)
 	{
@@ -128,15 +203,35 @@ void ARocketSimulationReplicator::MulticastLaunchBatch_Implementation(
 		Record.VisualGroupIndex = GroupIndex;
 		Record.TrailProfileId = Event.RocketClass->GetDefaultObject<ARocketProjectile>()
 			->GetManagedTrailProfileId();
+		if (Record.LaunchData.GuidanceMode == ERocketGuidanceMode::Homing)
+		{
+			Record.HomingTarget = Record.LaunchData.HomingTarget;
+			Record.WarningTarget = Record.HomingTarget;
+			if (AActor* Target = Record.WarningTarget.Get())
+			{
+				if (UMissileWarningComponent* Warning =
+					Target->FindComponentByClass<UMissileWarningComponent>())
+				{
+					Warning->AddIncomingManagedMissile(Event.RocketId);
+				}
+			}
+			// VisualRockets is not a reflected container. Keep the target only as a
+			// weak pointer so a destroyed aircraft cannot leave a stale UObject pointer.
+			Record.LaunchData.HomingTarget = nullptr;
+		}
 		BuildCurveCache(Record);
+		Record.Location = Event.LaunchData.StartLocation;
+		Record.Direction = Record.LaunchData.bUseSeparationCurve
+			? (FVector(Record.LaunchData.SeparationControlPoint1)
+				- FVector(Record.LaunchData.StartLocation)).GetSafeNormal(
+					SMALL_NUMBER, FVector(Record.LaunchData.Direction))
+			: FVector(Record.LaunchData.Direction).GetSafeNormal();
 		const AGameStateBase* GameState = GetWorld()->GetGameState();
 		const double ServerNow = GameState
 			? GameState->GetServerWorldTimeSeconds() : GetWorld()->GetTimeSeconds();
 		const float Elapsed = FMath::Max(0.0f,
 			static_cast<float>(ServerNow - Record.LaunchData.ServerStartTime));
-		Record.DistanceTraveled = FMath::Min(
-			Record.LaunchData.Speed * Elapsed,
-			Record.LaunchData.MaxTravelDistance);
+		AdvanceVisualRocket(Record, Elapsed);
 		const FTransform Transform = Group.MeshRelativeTransform * GetRocketTransform(Record);
 		if (!Group.FreeInstances.IsEmpty())
 		{
@@ -149,13 +244,33 @@ void ARocketSimulationReplicator::MulticastLaunchBatch_Implementation(
 			Record.InstanceIndex = Group.Instances->AddInstance(Transform, false);
 		}
 		VisualRockets.Add(Event.RocketId, MoveTemp(Record));
+		if (bRecordPerf)
+		{
+			++PerfCounters.VisualRocketsAdded;
+		}
 	}
 }
 
-void ARocketSimulationReplicator::MulticastExplosionBatch_Implementation(
-	const TArray<FManagedRocketExplosionEvent>& Events)
+void ARocketSimulationReplicator::MulticastUpdateBatch_Implementation(
+	const TArray<FManagedRocketExplosionEvent>& ExplosionEvents,
+	const TArray<FManagedRocketHomingUpdateEvent>& HomingUpdateEvents)
 {
-	for (const FManagedRocketExplosionEvent& Event : Events)
+	if (IsRocketPerfLoggingEnabled())
+	{
+		if (PerfCounters.WindowStartSeconds <= 0.0)
+		{
+			PerfCounters.WindowStartSeconds = FPlatformTime::Seconds();
+		}
+		PerfCounters.ExplosionEventsReceived += ExplosionEvents.Num();
+		PerfCounters.HomingUpdatesReceived += HomingUpdateEvents.Num();
+		PerfCounters.MaxUpdateBatch = FMath::Max(PerfCounters.MaxUpdateBatch,
+			ExplosionEvents.Num() + HomingUpdateEvents.Num());
+	}
+	for (const FManagedRocketHomingUpdateEvent& Event : HomingUpdateEvents)
+	{
+		ApplyHomingUpdate(Event);
+	}
+	for (const FManagedRocketExplosionEvent& Event : ExplosionEvents)
 	{
 		ReleaseVisualRocket(Event.RocketId, &Event.Impact);
 	}
@@ -250,12 +365,22 @@ float ARocketSimulationReplicator::FindCurveParameter(
 FTransform ARocketSimulationReplicator::GetRocketTransform(
 	const FVisualRocketRecord& Record) const
 {
+	if (Record.LaunchData.GuidanceMode == ERocketGuidanceMode::Homing)
+	{
+		return FTransform(Record.Direction.Rotation(), Record.Location);
+	}
+	return GetPathTransform(Record, Record.DistanceTraveled);
+}
+
+FTransform ARocketSimulationReplicator::GetPathTransform(
+	const FVisualRocketRecord& Record, const float Distance) const
+{
 	FVector Location;
 	FVector Direction = FVector(Record.LaunchData.Direction).GetSafeNormal();
 	if (Record.LaunchData.bUseSeparationCurve
-		&& Record.DistanceTraveled < Record.CurveLength)
+		&& Distance < Record.CurveLength)
 	{
-		const float T = FindCurveParameter(Record, Record.DistanceTraveled);
+		const float T = FindCurveParameter(Record, Distance);
 		Location = EvaluateCurve(Record, T);
 		const float O = 1.0f - T;
 		const FVector P0 = Record.LaunchData.StartLocation;
@@ -273,11 +398,117 @@ FTransform ARocketSimulationReplicator::GetRocketTransform(
 			? FVector(Record.LaunchData.SeparationEndPoint)
 			: FVector(Record.LaunchData.StartLocation);
 		const float StraightDistance = Record.LaunchData.bUseSeparationCurve
-			? FMath::Max(0.0f, Record.DistanceTraveled - Record.CurveLength)
-			: Record.DistanceTraveled;
+			? FMath::Max(0.0f, Distance - Record.CurveLength)
+			: Distance;
 		Location = Start + Direction * StraightDistance;
 	}
 	return FTransform(Direction.Rotation(), Location);
+}
+
+void ARocketSimulationReplicator::AdvanceVisualRocket(
+	FVisualRocketRecord& Record, const float DeltaSeconds) const
+{
+	if (DeltaSeconds <= 0.0f)
+	{
+		return;
+	}
+	const float Remaining = FMath::Max(0.0f,
+		Record.LaunchData.MaxTravelDistance - Record.DistanceTraveled);
+	const float Step = FMath::Min(Record.LaunchData.Speed * DeltaSeconds, Remaining);
+	const float NewDistance = Record.DistanceTraveled + Step;
+	if (Record.LaunchData.GuidanceMode != ERocketGuidanceMode::Homing)
+	{
+		Record.DistanceTraveled = NewDistance;
+		return;
+	}
+	const bool bFollowingLaunchCurve = Record.LaunchData.bUseSeparationCurve
+		&& Record.DistanceTraveled < Record.CurveLength;
+	if (bFollowingLaunchCurve)
+	{
+		const FTransform Transform = GetPathTransform(Record, NewDistance);
+		Record.Location = Transform.GetLocation();
+		Record.Direction = Transform.GetRotation().GetForwardVector();
+	}
+	else
+	{
+		if (!Record.bHomingDisabled)
+		{
+			const AActor* Target = Record.HomingTarget.Get();
+			if (IsValid(Target))
+			{
+				const FVector DesiredDirection =
+					(Target->GetActorLocation() - Record.Location).GetSafeNormal(
+						SMALL_NUMBER, Record.Direction);
+				Record.Direction = RotateDirectionTowards(Record.Direction, DesiredDirection,
+					Record.LaunchData.MaxTurnRateDegreesPerSecond, DeltaSeconds);
+			}
+		}
+		Record.Location += Record.Direction * Step;
+	}
+	Record.DistanceTraveled = NewDistance;
+}
+
+FVector ARocketSimulationReplicator::RotateDirectionTowards(
+	const FVector& CurrentDirection, const FVector& DesiredDirection,
+	const float MaxTurnRateDegreesPerSecond, const float DeltaSeconds) const
+{
+	const FVector Current = CurrentDirection.GetSafeNormal();
+	const FVector Desired = DesiredDirection.GetSafeNormal();
+	if (Current.IsNearlyZero() || Desired.IsNearlyZero())
+	{
+		return CurrentDirection;
+	}
+	const float Angle = FMath::Acos(FMath::Clamp(
+		FVector::DotProduct(Current, Desired), -1.0f, 1.0f));
+	if (Angle <= KINDA_SMALL_NUMBER)
+	{
+		return Desired;
+	}
+	const float MaxStep = FMath::DegreesToRadians(
+		FMath::Max(0.0f, MaxTurnRateDegreesPerSecond)) * DeltaSeconds;
+	const float Alpha = FMath::Clamp(MaxStep / Angle, 0.0f, 1.0f);
+	return FQuat::Slerp(FQuat::Identity,
+		FQuat::FindBetweenNormals(Current, Desired), Alpha)
+		.RotateVector(Current).GetSafeNormal();
+}
+
+void ARocketSimulationReplicator::ApplyHomingUpdate(
+	const FManagedRocketHomingUpdateEvent& Event)
+{
+	FVisualRocketRecord* Record = VisualRockets.Find(Event.RocketId);
+	if (!Record || Record->LaunchData.GuidanceMode != ERocketGuidanceMode::Homing)
+	{
+		return;
+	}
+	const AGameStateBase* GameState = GetWorld() ? GetWorld()->GetGameState() : nullptr;
+	const double ServerNow = GameState
+		? GameState->GetServerWorldTimeSeconds() : GetWorld()->GetTimeSeconds();
+	const float Elapsed = FMath::Max(0.0f,
+		static_cast<float>(ServerNow - Event.ServerTime));
+	const FVector CorrectedDirection = FVector(Event.Direction).GetSafeNormal(
+		SMALL_NUMBER, Record->Direction);
+	const FVector CorrectedLocation = FVector(Event.Location)
+		+ CorrectedDirection * Record->LaunchData.Speed * Elapsed;
+	const float ErrorSquared = FVector::DistSquared(Record->Location, CorrectedLocation);
+	const float Alpha = ErrorSquared > FMath::Square(5000.0f) ? 1.0f : 0.35f;
+	Record->Location = FMath::Lerp(Record->Location, CorrectedLocation, Alpha);
+	Record->Direction = FMath::Lerp(
+		Record->Direction, CorrectedDirection, Alpha).GetSafeNormal();
+	Record->DistanceTraveled = FMath::Max(Record->DistanceTraveled,
+		Event.DistanceTraveled + Record->LaunchData.Speed * Elapsed);
+	Record->bHomingDisabled = Event.bHomingDisabled;
+	if (Record->bHomingDisabled)
+	{
+		if (AActor* Target = Record->WarningTarget.Get())
+		{
+			if (UMissileWarningComponent* Warning =
+				Target->FindComponentByClass<UMissileWarningComponent>())
+			{
+				Warning->RemoveIncomingManagedMissile(Event.RocketId);
+			}
+		}
+		Record->WarningTarget.Reset();
+	}
 }
 
 FTransform ARocketSimulationReplicator::GetTrailTransform(
@@ -317,6 +548,8 @@ void ARocketSimulationReplicator::PublishTrailData()
 	{
 		return;
 	}
+	const double PublishStartSeconds = bPerfLoggingThisTick
+		? FPlatformTime::Seconds() : 0.0;
 	int32 DataIndex = 0;
 	FBox WorldBounds(EForceInit::ForceInit);
 	for (const TPair<uint32, FVisualRocketRecord>& Pair : VisualRockets)
@@ -346,6 +579,58 @@ void ARocketSimulationReplicator::PublishTrailData()
 			.ExpandBy(500.0f);
 		BatchedTrailComponent->SetSystemFixedBounds(LocalBounds);
 	}
+	if (bPerfLoggingThisTick)
+	{
+		const double PublishMilliseconds =
+			(FPlatformTime::Seconds() - PublishStartSeconds) * 1000.0;
+		++PerfCounters.NdcPublishes;
+		PerfCounters.NdcRows += DataIndex;
+		PerfCounters.TotalNdcMilliseconds += PublishMilliseconds;
+		PerfCounters.MaxNdcMilliseconds = FMath::Max(
+			PerfCounters.MaxNdcMilliseconds, PublishMilliseconds);
+	}
+}
+
+void ARocketSimulationReplicator::FinishPerfTick(const double TickStartSeconds)
+{
+	const double NowSeconds = FPlatformTime::Seconds();
+	const double TickMilliseconds = (NowSeconds - TickStartSeconds) * 1000.0;
+	PerfCounters.TotalTickMilliseconds += TickMilliseconds;
+	PerfCounters.MaxTickMilliseconds = FMath::Max(
+		PerfCounters.MaxTickMilliseconds, TickMilliseconds);
+	++PerfCounters.TickCount;
+	PerfCounters.MaxVisualRockets = FMath::Max(
+		PerfCounters.MaxVisualRockets, VisualRockets.Num());
+	if (NowSeconds - PerfCounters.WindowStartSeconds < GetRocketPerfLogInterval())
+	{
+		return;
+	}
+
+	const double AverageTickMilliseconds = PerfCounters.TickCount > 0
+		? PerfCounters.TotalTickMilliseconds / static_cast<double>(PerfCounters.TickCount)
+		: 0.0;
+	const double AverageNdcMilliseconds = PerfCounters.NdcPublishes > 0
+		? PerfCounters.TotalNdcMilliseconds / static_cast<double>(PerfCounters.NdcPublishes)
+		: 0.0;
+	UE_LOG(LogTemp, Display,
+		TEXT("[RocketPerf][Visual] World=%s Mode=%s Visual=%d MaxVisual=%d Groups=%d Ticks=%llu AvgTickMs=%.3f MaxTickMs=%.3f LaunchRecv=%llu LaunchAdded=%llu MaxLaunchBatch=%d ExplosionRecv=%llu HomingRecv=%llu MaxUpdateBatch=%d ISMUpdates=%llu DirtyGroups=%llu NDCPublishes=%llu NDCRows=%llu AvgNDCMs=%.3f MaxNDCMs=%.3f DistanceExpired=%llu"),
+		*GetNameSafe(GetWorld()), GetNetModeName(GetNetMode()), VisualRockets.Num(),
+		PerfCounters.MaxVisualRockets, VisualGroups.Num(),
+		static_cast<unsigned long long>(PerfCounters.TickCount),
+		AverageTickMilliseconds, PerfCounters.MaxTickMilliseconds,
+		static_cast<unsigned long long>(PerfCounters.LaunchEventsReceived),
+		static_cast<unsigned long long>(PerfCounters.VisualRocketsAdded),
+		PerfCounters.MaxLaunchBatch,
+		static_cast<unsigned long long>(PerfCounters.ExplosionEventsReceived),
+		static_cast<unsigned long long>(PerfCounters.HomingUpdatesReceived),
+		PerfCounters.MaxUpdateBatch,
+		static_cast<unsigned long long>(PerfCounters.InstanceUpdates),
+		static_cast<unsigned long long>(PerfCounters.DirtyGroups),
+		static_cast<unsigned long long>(PerfCounters.NdcPublishes),
+		static_cast<unsigned long long>(PerfCounters.NdcRows),
+		AverageNdcMilliseconds, PerfCounters.MaxNdcMilliseconds,
+		static_cast<unsigned long long>(PerfCounters.DistanceExpired));
+	PerfCounters.Reset(NowSeconds);
 }
 
 void ARocketSimulationReplicator::ReleaseVisualRocket(const uint32 RocketId,
@@ -360,6 +645,14 @@ void ARocketSimulationReplicator::ReleaseVisualRocket(const uint32 RocketId,
 	{
 		Record->RocketClass->GetDefaultObject<ARocketProjectile>()
 			->PlayManagedExplosionCosmetics(GetWorld(), Record->LaunchData, *Impact);
+	}
+	if (AActor* Target = Record->WarningTarget.Get())
+	{
+		if (UMissileWarningComponent* Warning =
+			Target->FindComponentByClass<UMissileWarningComponent>())
+		{
+			Warning->RemoveIncomingManagedMissile(RocketId);
+		}
 	}
 	if (VisualGroups.IsValidIndex(Record->VisualGroupIndex))
 	{

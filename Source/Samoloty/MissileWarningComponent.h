@@ -23,9 +23,14 @@ public:
 
 	void AddIncomingMissile(ARocketProjectile* Missile);
 	void RemoveIncomingMissile(ARocketProjectile* Missile);
+	void AddIncomingManagedMissile(uint32 RocketId);
+	void RemoveIncomingManagedMissile(uint32 RocketId);
 
 	UFUNCTION(BlueprintPure, Category="Plane|Audio|Missile Warning")
-	int32 GetIncomingMissileCount() const { return IncomingMissiles.Num(); }
+	int32 GetIncomingMissileCount() const
+	{
+		return IncomingMissiles.Num() + IncomingManagedMissiles.Num();
+	}
 
 protected:
 	/** Use a looping Sound Cue/MetaSound for a continuous warning siren. */
@@ -41,6 +46,7 @@ private:
 	void UpdateWarningAudio();
 
 	TSet<TWeakObjectPtr<ARocketProjectile>> IncomingMissiles;
+	TSet<uint32> IncomingManagedMissiles;
 
 	UPROPERTY(Transient)
 	TObjectPtr<UAudioComponent> WarningAudioComponent;

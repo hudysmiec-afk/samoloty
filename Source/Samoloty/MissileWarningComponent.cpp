@@ -49,6 +49,22 @@ void UMissileWarningComponent::RemoveIncomingMissile(ARocketProjectile* Missile)
 	UpdateWarningAudio();
 }
 
+void UMissileWarningComponent::AddIncomingManagedMissile(const uint32 RocketId)
+{
+	if (!IsLocalPlayerOwner() || RocketId == 0)
+	{
+		return;
+	}
+	IncomingManagedMissiles.Add(RocketId);
+	UpdateWarningAudio();
+}
+
+void UMissileWarningComponent::RemoveIncomingManagedMissile(const uint32 RocketId)
+{
+	IncomingManagedMissiles.Remove(RocketId);
+	UpdateWarningAudio();
+}
+
 bool UMissileWarningComponent::IsLocalPlayerOwner() const
 {
 	const APawn* OwnerPawn = Cast<APawn>(GetOwner());
@@ -57,7 +73,7 @@ bool UMissileWarningComponent::IsLocalPlayerOwner() const
 
 void UMissileWarningComponent::UpdateWarningAudio()
 {
-	const bool bShouldPlay = IncomingMissiles.Num() > 0 && IncomingMissileWarningSound;
+	const bool bShouldPlay = GetIncomingMissileCount() > 0 && IncomingMissileWarningSound;
 	if (bShouldPlay && !WarningAudioComponent)
 	{
 		WarningAudioComponent = NewObject<UAudioComponent>(GetOwner(), TEXT("MissileWarningAudio"));
@@ -85,6 +101,7 @@ void UMissileWarningComponent::UpdateWarningAudio()
 void UMissileWarningComponent::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
 	IncomingMissiles.Reset();
+	IncomingManagedMissiles.Reset();
 	if (WarningAudioComponent)
 	{
 		WarningAudioComponent->Stop();
